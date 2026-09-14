@@ -1,0 +1,27 @@
+table:
+  name: olist_orders
+
+source:
+  type: bronze
+
+target:
+  type: silver
+
+transformations:
+  standardize_column_names: true
+
+  remove_duplicates:
+    enabled: true
+    keys:
+      - order_id
+
+  timestamp_columns:
+    - order_purchase_timestamp
+    - order_approved_at
+    - order_delivered_carrier_date
+    - order_delivered_customer_date
+    - order_estimated_delivery_date
+
+write:
+  mode: overwrite
+  format: parquet

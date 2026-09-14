@@ -1,0 +1,23 @@
+.env
+.DS_Store
+# Logs
+*.log
+logs/
+
+# Data files
+*.csv
+*.parquet
+*.json
+
+# AWS credentials
+.aws/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# IDE
+.vscode/
+.idea/

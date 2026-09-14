@@ -1,0 +1,16 @@
+table:
+  name: olist_orders
+
+source:
+  type: raw
+  file: olist_orders_dataset.csv
+
+target:
+  type: bronze
+
+read:
+  header: true
+  infer_schema: true
+
+write:
+  mode: overwrite

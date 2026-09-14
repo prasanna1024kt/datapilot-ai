@@ -1,0 +1,20 @@
+project:
+  name: datapilot-ai
+  environment: dev
+
+storage:
+  type: s3
+  bucket: datapilot-ai-data-practice
+  region: us-east-1
+
+layers:
+  raw: raw
+  bronze: bronze
+  silver: silver
+  gold: gold
+
+formats:
+  raw: csv
+  bronze: parquet
+  silver: parquet
+  gold: parquet

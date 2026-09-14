@@ -1,0 +1,23 @@
+table:
+  name: olist_order_summary
+
+source:
+  type: silver
+  table: olist_orders
+
+target:
+  type: gold
+
+business_logic:
+  type: aggregation
+
+group_by:
+  - order_status
+
+metrics:
+  - name: order_count
+    expression: count(order_id)
+
+write:
+  mode: overwrite
+  format: parquet
