@@ -1,23 +1,17 @@
-table:
-  name: olist_order_summary
-
 source:
   type: silver
-  table: olist_orders
+
+  tables:
+    orders: olist_orders
+    order_items: olist_order_items
+    payments: olist_order_payments
+    customers: olist_customers
+    products: olist_products
 
 target:
   type: gold
+  table: olist_order_summary
 
-business_logic:
-  type: aggregation
-
-group_by:
-  - order_status
-
-metrics:
-  - name: order_count
-    expression: count(order_id)
-
-write:
-  mode: overwrite
-  format: parquet
+transformations:
+  standardize_column_names: true
+  trim_strings: true

@@ -1,0 +1,29 @@
+source:
+  type: bronze
+  table: olist_products
+
+target:
+  type: silver
+
+transformations:
+  standardize_column_names: true
+
+  trim_strings: true
+
+  remove_duplicates:
+    enabled: true
+    keys:
+      - product_id
+
+  cast_columns:
+    product_name_lenght: integer
+    product_description_lenght: integer
+    product_photos_qty: integer
+    product_weight_g: integer
+    product_length_cm: integer
+    product_height_cm: integer
+    product_width_cm: integer
+
+  null_handling:
+    drop_if_null:
+      - product_id

@@ -1,0 +1,29 @@
+source:
+  type: bronze
+  table: olist_geolocation
+
+target:
+  type: silver
+
+transformations:
+  standardize_column_names: true
+
+  trim_strings: true
+
+  remove_duplicates:
+    enabled: true
+    keys:
+      - geolocation_zip_code_prefix
+      - geolocation_lat
+      - geolocation_lng
+
+  cast_columns:
+    geolocation_zip_code_prefix: integer
+    geolocation_lat: double
+    geolocation_lng: double
+
+  null_handling:
+    drop_if_null:
+      - geolocation_zip_code_prefix
+      - geolocation_lat
+      - geolocation_lng

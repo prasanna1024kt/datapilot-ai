@@ -1,0 +1,24 @@
+source:
+  type: bronze
+  table: olist_customers
+
+target:
+  type: silver
+
+transformations:
+  standardize_column_names: true
+
+  trim_strings: true
+
+  remove_duplicates:
+    enabled: true
+    keys:
+      - customer_id
+
+  null_handling:
+    drop_if_null:
+      - customer_id
+      - customer_unique_id
+
+  cast_columns:
+    customer_zip_code_prefix: integer

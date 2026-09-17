@@ -1,0 +1,38 @@
+dataset: olist_products
+
+checks:
+
+  row_count:
+    enabled: true
+    min: 1
+
+  required_columns:
+    enabled: true
+    columns:
+      - product_id
+      - product_category_name
+      - product_weight_g
+      - product_length_cm
+      - product_height_cm
+      - product_width_cm
+
+  null_checks:
+    enabled: true
+    columns:
+      - product_id
+
+  duplicate_check:
+    enabled: true
+    keys:
+      - product_id
+
+  range_checks:
+    enabled: true
+
+    product_weight_g:
+      min: 0
+      max: 100000
+
+    product_photos_qty:
+      min: 0
+      max: 100

@@ -1,0 +1,23 @@
+source:
+  type: bronze
+  table: olist_sellers
+
+target:
+  type: silver
+
+transformations:
+  standardize_column_names: true
+
+  trim_strings: true
+
+  remove_duplicates:
+    enabled: true
+    keys:
+      - seller_id
+
+  cast_columns:
+    seller_zip_code_prefix: integer
+
+  null_handling:
+    drop_if_null:
+      - seller_id

@@ -1,0 +1,18 @@
+source:
+  type: raw
+  file: olist_order_reviews_dataset.csv
+
+read:
+  header: true
+  inferSchema: true
+  quote: '"'
+  escape: '"'
+  multiLine: true
+
+target:
+  type: bronze
+
+write:
+  mode: overwrite
+  partition_strategy: coalesce
+  partitions: 1

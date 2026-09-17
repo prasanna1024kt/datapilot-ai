@@ -1,0 +1,34 @@
+dataset: olist_customers
+
+checks:
+
+  row_count:
+    enabled: true
+    min: 1
+
+  required_columns:
+    enabled: true
+    columns:
+      - customer_id
+      - customer_unique_id
+      - customer_zip_code_prefix
+      - customer_city
+      - customer_state
+
+  null_checks:
+    enabled: true
+    columns:
+      - customer_id
+      - customer_unique_id
+
+  duplicate_check:
+    enabled: true
+    keys:
+      - customer_id
+
+  range_checks:
+    enabled: true
+
+    customer_zip_code_prefix:
+      min: 1
+      max: 99999

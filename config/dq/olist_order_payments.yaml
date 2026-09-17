@@ -1,0 +1,40 @@
+dataset: olist_order_payments
+
+checks:
+
+  row_count:
+    enabled: true
+    min: 1
+
+  required_columns:
+    enabled: true
+    columns:
+      - order_id
+      - payment_sequential
+      - payment_type
+      - payment_installments
+      - payment_value
+
+  null_checks:
+    enabled: true
+    columns:
+      - order_id
+      - payment_type
+      - payment_value
+
+  duplicate_check:
+    enabled: true
+    keys:
+      - order_id
+      - payment_sequential
+
+  range_checks:
+    enabled: true
+
+    payment_value:
+      min: 0
+      max: 100000
+
+    payment_installments:
+      min: 1
+      max: 100

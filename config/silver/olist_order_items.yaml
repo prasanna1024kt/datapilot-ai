@@ -1,6 +1,6 @@
 source:
   type: bronze
-  table: olist_orders
+  table: olist_order_items
 
 target:
   type: silver
@@ -14,15 +14,18 @@ transformations:
     enabled: true
     keys:
       - order_id
+      - order_item_id
 
   timestamp_columns:
-    - order_purchase_timestamp
-    - order_approved_at
-    - order_delivered_carrier_date
-    - order_delivered_customer_date
-    - order_estimated_delivery_date
+    - shipping_limit_date
+
+  cast_columns:
+    order_item_id: integer
+    price: decimal(12,2)
+    freight_value: decimal(12,2)
 
   null_handling:
     drop_if_null:
       - order_id
-      - customer_id
+      - product_id
+      - seller_id

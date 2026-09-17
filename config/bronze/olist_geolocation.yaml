@@ -1,0 +1,15 @@
+source:
+  type: raw
+  file: olist_geolocation_dataset.csv
+
+read:
+  header: true
+  inferSchema: true
+
+target:
+  type: bronze
+
+write:
+  mode: overwrite
+  partition_strategy: repartition
+  partitions: 2

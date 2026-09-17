@@ -1,0 +1,36 @@
+dataset: olist_order_reviews
+
+checks:
+
+  row_count:
+    enabled: true
+    min: 1
+
+  required_columns:
+    enabled: true
+    columns:
+      - review_id
+      - order_id
+      - review_score
+      - review_creation_date
+      - review_answer_timestamp
+
+  null_checks:
+    enabled: true
+    columns:
+      - review_id
+      - order_id
+      - review_score
+
+  duplicate_check:
+    enabled: true
+    keys:
+      - review_id
+      - order_id
+
+  range_checks:
+    enabled: true
+
+    review_score:
+      min: 1
+      max: 5

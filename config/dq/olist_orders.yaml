@@ -1,0 +1,28 @@
+dataset: olist_orders
+
+checks:
+
+  row_count:
+    enabled: true
+    min: 1
+
+  required_columns:
+    enabled: true
+    columns:
+      - order_id
+      - customer_id
+      - order_status
+      - order_purchase_timestamp
+      - order_estimated_delivery_date
+
+  null_checks:
+    enabled: true
+    columns:
+      - order_id
+      - customer_id
+      - order_status
+
+  duplicate_check:
+    enabled: true
+    keys:
+      - order_id

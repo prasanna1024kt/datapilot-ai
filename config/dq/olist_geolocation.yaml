@@ -1,0 +1,41 @@
+dataset: olist_geolocation
+
+checks:
+
+  row_count:
+    enabled: true
+    min: 1
+
+  required_columns:
+    enabled: true
+    columns:
+      - geolocation_zip_code_prefix
+      - geolocation_lat
+      - geolocation_lng
+      - geolocation_city
+      - geolocation_state
+
+  null_checks:
+    enabled: true
+    columns:
+      - geolocation_zip_code_prefix
+      - geolocation_lat
+      - geolocation_lng
+
+  duplicate_check:
+    enabled: true
+    keys:
+      - geolocation_zip_code_prefix
+      - geolocation_lat
+      - geolocation_lng
+
+  range_checks:
+    enabled: true
+
+    geolocation_lat:
+      min: -90
+      max: 90
+
+    geolocation_lng:
+      min: -180
+      max: 180

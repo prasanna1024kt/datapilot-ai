@@ -1,0 +1,32 @@
+dataset: olist_sellers
+
+checks:
+
+  row_count:
+    enabled: true
+    min: 1
+
+  required_columns:
+    enabled: true
+    columns:
+      - seller_id
+      - seller_zip_code_prefix
+      - seller_city
+      - seller_state
+
+  null_checks:
+    enabled: true
+    columns:
+      - seller_id
+
+  duplicate_check:
+    enabled: true
+    keys:
+      - seller_id
+
+  range_checks:
+    enabled: true
+
+    seller_zip_code_prefix:
+      min: 1
+      max: 99999

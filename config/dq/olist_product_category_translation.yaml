@@ -1,0 +1,24 @@
+dataset: olist_product_category_translation
+
+checks:
+
+  row_count:
+    enabled: true
+    min: 1
+
+  required_columns:
+    enabled: true
+    columns:
+      - product_category_name
+      - product_category_name_english
+
+  null_checks:
+    enabled: true
+    columns:
+      - product_category_name
+      - product_category_name_english
+
+  duplicate_check:
+    enabled: true
+    keys:
+      - product_category_name

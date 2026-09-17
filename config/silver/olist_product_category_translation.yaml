@@ -1,0 +1,21 @@
+source:
+  type: bronze
+  table: olist_product_category_translation
+
+target:
+  type: silver
+
+transformations:
+  standardize_column_names: true
+
+  trim_strings: true
+
+  remove_duplicates:
+    enabled: true
+    keys:
+      - product_category_name
+
+  null_handling:
+    drop_if_null:
+      - product_category_name
+      - product_category_name_english

@@ -1,0 +1,28 @@
+source:
+  type: bronze
+  table: olist_order_reviews
+
+target:
+  type: silver
+
+transformations:
+  standardize_column_names: true
+
+  timestamp_columns:
+    - review_creation_date
+    - review_answer_timestamp
+
+  remove_duplicates:
+    enabled: true
+    keys:
+      - review_id
+      - order_id
+
+  null_handling:
+    drop_if_null:
+      - review_id
+      - order_id
+      - review_score
+
+  cast_columns:
+    review_score: integer

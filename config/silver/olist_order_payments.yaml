@@ -1,6 +1,6 @@
 source:
   type: bronze
-  table: olist_orders
+  table: olist_order_payments
 
 target:
   type: silver
@@ -14,15 +14,14 @@ transformations:
     enabled: true
     keys:
       - order_id
+      - payment_sequential
 
-  timestamp_columns:
-    - order_purchase_timestamp
-    - order_approved_at
-    - order_delivered_carrier_date
-    - order_delivered_customer_date
-    - order_estimated_delivery_date
+  cast_columns:
+    payment_sequential: integer
+    payment_installments: integer
+    payment_value: decimal(12,2)
 
   null_handling:
     drop_if_null:
       - order_id
-      - customer_id
+      - payment_type

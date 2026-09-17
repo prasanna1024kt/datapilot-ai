@@ -40,7 +40,7 @@ def main():
 
     spark = (
         SparkSession.builder
-        .appName("DataPilot-S3-Parquet-Test")
+        .appName(f"DataPilot-{args.layer}-{args.table}")
         .config(
             "spark.hadoop.fs.s3a.aws.credentials.provider",
             "software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider"
