@@ -5,7 +5,7 @@ import yaml
 from pyspark.sql import SparkSession
 
 from framework.dq.engine import DQEngine
-
+import json 
 
 def parse_args():
 
@@ -49,6 +49,30 @@ def build_silver_path(variables, table):
 
     return f"s3a://{bucket}/{silver_path}/{table}"
 
+def save_dq_results(table,results,overall_status):
+    RESULTS_ROOT = "/opt/datapilot/results"
+
+    path = (
+        f"{RESULTS_ROOT}/dq/"
+        f"{table}.json"
+    )
+
+    payload = {
+        "dataset": table,
+        "status": overall_status,
+        "checks": results,
+    }
+
+    with open(path, "w") as file:
+        json.dump(
+            payload,
+            file,
+            indent=2,
+            default=str,
+        )
+
+    print("")
+    print(f"DQ results saved to: {path}")
 
 def main():
 
@@ -100,6 +124,13 @@ def main():
         results = dq_engine.run(
             df,
             dq_config
+        )
+        overall_status = ("FAIL" if dq_engine.has_failures(results) else "PASS" )
+
+        save_dq_results(
+            table=args.table,
+            results=results,
+            overall_status=overall_status,
         )
 
         for result in results:

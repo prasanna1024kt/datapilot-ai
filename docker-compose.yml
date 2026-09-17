@@ -133,6 +133,7 @@ services:
       - ~/.aws:/opt/spark/.aws:ro
       - ./spark:/opt/spark-apps
       - ./config:/opt/datapilot/config:ro
+      - ./results:/opt/datapilot/results
 
     command: scheduler
 
