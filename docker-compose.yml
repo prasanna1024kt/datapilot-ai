@@ -134,6 +134,7 @@ services:
       - ./spark:/opt/spark-apps
       - ./config:/opt/datapilot/config:ro
       - ./results:/opt/datapilot/results
+      - ./agents:/opt/datapilot/agents:ro
 
     command: scheduler
 
