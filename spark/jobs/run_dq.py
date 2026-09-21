@@ -49,7 +49,7 @@ def build_silver_path(variables, table):
 
     return f"s3a://{bucket}/{silver_path}/{table}"
 
-def save_dq_results(table,results,overall_status):
+def save_dq_results(table, results, overall_status):
     RESULTS_ROOT = "/opt/datapilot/results"
 
     path = (
