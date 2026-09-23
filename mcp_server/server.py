@@ -265,6 +265,66 @@ def inspect_silver(dataset: str,column: str,minimum: float,maximum: float,) -> d
         encoding="utf-8",
     ) as file:
         return json.load(file)
+    
+
+@mcp.tool(title="Get Invalid Records")
+def get_invalid_records(dataset: str,column: str,minimum: float,maximum: float,) -> dict:
+    """
+    Retrieve actual invalid Bronze records for RCA investigation.
+    """
+
+    output_file = (
+        PROJECT_ROOT
+        / "results"
+        / "rca"
+        / f"mcp_invalid_{dataset}.json"
+    )
+
+    output_file.parent.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    command = [
+        "docker-compose",
+        "exec",
+        "-T",
+        "airflow-scheduler",
+
+        "/opt/spark/bin/spark-submit",
+
+        "--master",
+        "spark://spark-master:7077",
+
+        "/opt/spark-apps/jobs/get_invalid_records.py",
+
+        "--dataset",
+        dataset,
+
+        "--column",
+        column,
+
+        "--minimum",
+        str(minimum),
+
+        "--maximum",
+        str(maximum),
+
+        "--output",
+        f"/opt/datapilot/results/rca/mcp_invalid_{dataset}.json",
+    ]
+
+    subprocess.run(
+        command,
+        check=True
+    )
+
+    with open(
+        output_file,
+        "r"
+    ) as file:
+
+        return json.load(file)
 # ---------------------------------------------------------
 # ASGI application
 # ---------------------------------------------------------

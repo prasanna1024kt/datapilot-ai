@@ -203,21 +203,13 @@ def validate_mcp_evidence(
     name="DataPilot RCA - MCP Evidence Collection",
     run_type="chain"
 )
-def collect_mcp_evidence(
-    dataset: str,
-    column: str,
-    minimum: float,
-    maximum: float
-) -> dict:
+def collect_mcp_evidence(dataset: str,column: str,minimum: float,maximum: float) -> dict:
     """
-    Collect DQ, Bronze and Silver evidence through MCP.
+    Collect DQ, Bronze, Silver and invalid-record
+    evidence through MCP.
     """
 
     print("\nCollecting evidence through MCP...")
-
-    # -----------------------------------------------------
-    # 1. Get DQ result
-    # -----------------------------------------------------
 
     print("  → get_dq_result")
 
@@ -227,10 +219,6 @@ def collect_mcp_evidence(
             "dataset": dataset
         }
     )
-
-    # -----------------------------------------------------
-    # 2. Inspect Bronze
-    # -----------------------------------------------------
 
     print("  → inspect_bronze")
 
@@ -244,10 +232,6 @@ def collect_mcp_evidence(
         }
     )
 
-    # -----------------------------------------------------
-    # 3. Inspect Silver
-    # -----------------------------------------------------
-
     print("  → inspect_silver")
 
     silver_result = call_tool(
@@ -260,9 +244,17 @@ def collect_mcp_evidence(
         }
     )
 
-    # -----------------------------------------------------
-    # Validate evidence
-    # -----------------------------------------------------
+    print("  → get_invalid_records")
+
+    invalid_records = call_tool(
+        "get_invalid_records",
+        {
+            "dataset": dataset,
+            "column": column,
+            "minimum": minimum,
+            "maximum": maximum
+        }
+    )
 
     validate_mcp_evidence(
         dq_result=dq_result,
@@ -270,14 +262,11 @@ def collect_mcp_evidence(
         silver_result=silver_result
     )
 
-    # -----------------------------------------------------
-    # Build evidence bundle
-    # -----------------------------------------------------
-
     evidence_bundle = {
         "dq_result": dq_result,
         "bronze": bronze_result,
-        "silver": silver_result
+        "silver": silver_result,
+        "invalid_records": invalid_records
     }
 
     print("MCP evidence collection completed.")
@@ -293,10 +282,7 @@ def collect_mcp_evidence(
     name="DataPilot RCA - OpenAI Analysis",
     run_type="llm"
 )
-def analyze_with_openai(
-    dq_result,
-    rca_evidence
-):
+def analyze_with_openai(dq_result, rca_evidence):
     """
     Send the MCP evidence bundle to OpenAI
     for structured RCA reasoning.
@@ -601,7 +587,9 @@ def main():
 
         rca_evidence = {
             "bronze": evidence_bundle["bronze"],
-            "silver": evidence_bundle["silver"]
+            "silver": evidence_bundle["silver"],
+            "invalid_records": evidence_bundle["invalid_records"]
+
         }
 
         # -------------------------------------------------
