@@ -121,6 +121,34 @@ RCA_SCHEMA = {
         "recommendation": {
             "type": "string"
         },
+        "remediation": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "SOURCE_CORRECTION",
+                        "QUARANTINE_RECORDS",
+                        "TRANSFORMATION_FIX",
+                        "UPDATE_DQ_RULE",
+                        "NO_ACTION",
+                        "MANUAL_REVIEW"
+                    ]
+                },
+                "requires_approval": {
+                    "type": "boolean"
+                },
+                "reason": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "action",
+                "requires_approval",
+                "reason"
+            ],
+            "additionalProperties": False
+        },
         "next_actions": {
             "type": "array",
             "items": {
@@ -137,15 +165,16 @@ RCA_SCHEMA = {
         }
     },
     "required": [
-        "dataset",
-        "dq_status",
-        "classification",
-        "root_cause",
-        "evidence",
-        "recommendation",
-        "next_actions",
-        "confidence"
-    ],
+    "dataset",
+    "dq_status",
+    "classification",
+    "root_cause",
+    "evidence",
+    "recommendation",
+    "remediation",
+    "next_actions",
+    "confidence"
+ ],
     "additionalProperties": False
 }
 
@@ -425,59 +454,35 @@ def print_rca_result(result):
     print("DATAPILOT AI RCA RESULT")
     print("========================================")
 
-    print(
-        f"Dataset        : "
-        f"{result['dataset']}"
-    )
+    print(f"Dataset        : " f"{result['dataset']}")
 
-    print(
-        f"DQ Status      : "
-        f"{result['dq_status']}"
-    )
+    print(f"DQ Status      : "f"{result['dq_status']}")
 
-    print(
-        f"Classification : "
-        f"{result['classification']}"
-    )
+    print(f"Classification : " f"{result['classification']}")
 
-    print(
-        f"Confidence     : "
-        f"{result['confidence']}"
-    )
+    print(f"Confidence     : " f"{result['confidence']}")
 
-    print(
-        "\nRoot Cause:"
-    )
+    print("\nRoot Cause:")
 
-    print(
-        result["root_cause"]
-    )
+    print(result["root_cause"])
 
-    print(
-        "\nEvidence:"
-    )
+    print("\nEvidence:")
 
     for evidence in result["evidence"]:
-        print(
-            f"  - {evidence}"
-        )
+        print(f"  - {evidence}")
 
-    print(
-        "\nRecommendation:"
-    )
+    print("\nRemediation:")
 
-    print(
-        result["recommendation"]
-    )
+    print(f"  Action            : " f"{result['remediation']['action']}")
 
-    print(
-        "\nNext Actions:"
-    )
+    print(f"  Requires Approval : " f"{result['remediation']['requires_approval']}")
+
+    print(f"  Reason            : " f"{result['remediation']['reason']}")
+
+    print("\nNext Actions:")
 
     for action in result["next_actions"]:
-        print(
-            f"  - {action}"
-        )
+        print(f"  - {action}")
 
     print(
         "========================================"

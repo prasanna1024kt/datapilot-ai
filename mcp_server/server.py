@@ -325,6 +325,79 @@ def get_invalid_records(dataset: str,column: str,minimum: float,maximum: float,)
     ) as file:
 
         return json.load(file)
+    
+
+@mcp.tool(title="Approve Remediation")
+def approve_remediation(dataset: str,action: str,approved_by: str,) -> dict:
+    """
+    Approve a remediation plan.
+
+    This tool records approval only.
+    It does not execute the remediation.
+    """
+
+    approval_path = (
+        PROJECT_ROOT
+        / "results"
+        / "approvals"
+        / f"{dataset}.json"
+    )
+
+    approval = {
+        "dataset": dataset,
+        "action": action,
+        "status": "APPROVED",
+        "approved_by": approved_by,
+        "execution_authorized": True,
+    }
+
+    approval_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(approval_path, "w") as file:
+        json.dump(
+            approval,
+            file,
+            indent=2
+        )
+
+    return approval
+
+
+@mcp.tool(title="Reject Remediation")
+def reject_remediation(dataset: str,action: str,rejected_by: str,reason: str,) -> dict:
+    """
+    Reject a remediation plan.
+
+    This tool records rejection only.
+    It does not execute anything.
+    """
+
+    approval_path = (
+        PROJECT_ROOT
+        / "results"
+        / "approvals"
+        / f"{dataset}.json"
+    )
+
+    approval = {
+        "dataset": dataset,
+        "action": action,
+        "status": "REJECTED",
+        "rejected_by": rejected_by,
+        "reason": reason,
+        "execution_authorized": False,
+    }
+
+    approval_path.parent.mkdir(parents=True,exist_ok=True)
+
+    with open(approval_path, "w") as file:
+        json.dump(
+            approval,
+            file,
+            indent=2
+        )
+
+    return approval    
 # ---------------------------------------------------------
 # ASGI application
 # ---------------------------------------------------------
