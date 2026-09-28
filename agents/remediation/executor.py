@@ -21,11 +21,7 @@ def load_json(path: Path) -> dict:
         return json.load(file)
 
 
-def validate_approval(
-    approval: dict,
-    dataset: str,
-    action: str,
-) -> None:
+def validate_approval(approval: dict,dataset: str,action: str,) -> None:
 
     if approval.get("dataset") != dataset:
         raise RuntimeError("Approval dataset does not match requested dataset.")
@@ -53,10 +49,7 @@ def validate_action(action: str) -> None:
         )
 
 
-def execute_quarantine(
-    dataset: str,
-    remediation_plan: dict,
-) -> dict:
+def execute_quarantine(dataset: str, remediation_plan: dict) -> dict:
 
     """
     Dry-run quarantine executor.
@@ -81,10 +74,7 @@ def execute_quarantine(
     return execution_result
 
 
-def execute(
-    dataset: str,
-    action: str,
-) -> dict:
+def execute(dataset: str, action: str) -> dict:
 
     remediation_path = (
         REMEDIATION_DIR / f"{dataset}.json"

@@ -221,12 +221,12 @@ services:
 
     environment:
       HOME: /opt/spark
-
       AWS_PROFILE: datapilot
       AWS_DEFAULT_REGION: us-east-1
-
       AWS_SHARED_CREDENTIALS_FILE: /opt/spark/.aws/credentials
       AWS_CONFIG_FILE: /opt/spark/.aws/config
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
 
     volumes:
       - ./spark:/opt/spark-apps
@@ -266,6 +266,8 @@ services:
 
       AWS_SHARED_CREDENTIALS_FILE: /opt/spark/.aws/credentials
       AWS_CONFIG_FILE: /opt/spark/.aws/config
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
 
     volumes:
       - ./spark:/opt/spark-apps
@@ -297,6 +299,8 @@ services:
 
       AWS_SHARED_CREDENTIALS_FILE: /opt/spark/.aws/credentials
       AWS_CONFIG_FILE: /opt/spark/.aws/config
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
 
     volumes:
       - ./spark:/opt/spark-apps
