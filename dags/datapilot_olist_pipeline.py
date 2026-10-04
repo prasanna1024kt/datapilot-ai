@@ -10,7 +10,13 @@ SPARK_CONNECTION = "spark_default"
 
 PIPELINE_APPLICATION = "/opt/spark-apps/jobs/run_pipeline.py"
 DQ_APPLICATION = "/opt/spark-apps/jobs/run_dq.py"
-GOLD_APPLICATION = "/opt/spark-apps/jobs/run_gold.py"
+
+# New incremental Iceberg Gold
+GOLD_APPLICATION = "/opt/spark-apps/jobs/gold_incremental_iceberg.py"
+GOLD_CONFIG = "/opt/datapilot/config/gold_tables.yaml"
+
+# Existing business summary Gold
+GOLD_SUMMARY_APPLICATION = "/opt/spark-apps/jobs/run_gold.py"
 
 FRAMEWORK_ZIP = "/opt/spark-apps/framework.zip"
 CONFIG_ROOT = "/opt/datapilot/config"
@@ -70,6 +76,19 @@ DQ_TABLES = [
     "olist_sellers",
     "olist_geolocation",
     "olist_product_category_translation",
+]
+
+
+GOLD_TABLES = [
+    "olist_customers",
+    "olist_geolocation",
+    "olist_order_items",
+    "olist_order_payments",
+    "olist_order_reviews",
+    "olist_orders",
+    "olist_product_category_translation",
+    "olist_products",
+    "olist_sellers",
 ]
 
 
@@ -202,7 +221,40 @@ with DAG(
 
     # ========================================================
     # Gold
-    # Silver Parquet -> Gold Business Dataset
+    # Silver Parquet -> Gold Iceberg
+    # ========================================================
+
+    gold_tasks = {}
+
+    for table in GOLD_TABLES:
+
+        gold_tasks[table] = SparkSubmitOperator(
+            task_id=f"gold_{table}",
+
+            conn_id=SPARK_CONNECTION,
+
+            application=GOLD_APPLICATION,
+
+            name=f"DataPilot-Gold-{table}",
+
+            application_args=[
+                "--dataset",
+                table,
+                "--config",
+                GOLD_CONFIG,
+            ],
+
+            conf=SPARK_CONF,
+
+            env_vars=SPARK_ENV,
+
+            verbose=True,
+        )
+
+
+    # ========================================================
+    # Gold Business Summary
+    # Gold Iceberg -> Order Summary
     # ========================================================
 
     gold_olist_order_summary = SparkSubmitOperator(
@@ -210,7 +262,7 @@ with DAG(
 
         conn_id=SPARK_CONNECTION,
 
-        application=GOLD_APPLICATION,
+        application=GOLD_SUMMARY_APPLICATION,
 
         name="DataPilot-Gold-Olist-Order-Summary",
 
@@ -235,16 +287,32 @@ with DAG(
     # Dependencies
     # ========================================================
 
-    # All Bronze tasks must complete before Silver starts
+    # Bronze -> Silver
     for table in BRONZE_TABLES:
         bronze_tasks[table] >> silver_tasks[table]
 
 
-    # All Silver tasks must complete before their DQ checks
+    # Silver -> DQ
     for table in SILVER_TABLES:
         silver_tasks[table] >> dq_tasks[table]
 
 
-    # Gold waits for all DQ checks
+    # DQ -> Gold
+    #
+    # Each Gold table is gated by its own DQ result.
+    #
+    # Example:
+    #
+    # olist_orders:
+    # Silver -> DQ -> Gold
+    #
+    # olist_order_payments:
+    # Silver -> DQ FAIL -> Gold BLOCKED
+    #
     for table in DQ_TABLES:
-        dq_tasks[table] >> gold_olist_order_summary
+        dq_tasks[table] >> gold_tasks[table]
+
+
+    # All Gold tables -> Business Summary
+    for table in GOLD_TABLES:
+        gold_tasks[table] >> gold_olist_order_summary

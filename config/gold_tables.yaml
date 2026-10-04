@@ -1,0 +1,128 @@
+gold:
+  catalog: glue_catalog
+  database: datapilot
+
+  warehouse: s3a://datapilot-ai-data-practice/gold
+
+  tables:
+
+    # =====================================================
+    # Customers
+    # =====================================================
+
+    olist_customers:
+      enabled: true
+      source_path: s3a://datapilot-ai-data-practice/processed/silver/olist_customers
+      target_table: olist_customers
+      keys:
+        - customer_id
+      validate_source_duplicates: true
+
+
+    # =====================================================
+    # Geolocation
+    # =====================================================
+
+    olist_geolocation:
+      enabled: true
+      source_path: s3a://datapilot-ai-data-practice/processed/silver/olist_geolocation
+      target_table: olist_geolocation
+      keys:
+        - geolocation_zip_code_prefix
+        - geolocation_lat
+        - geolocation_lng
+      validate_source_duplicates: true
+
+
+    # =====================================================
+    # Order Items
+    # =====================================================
+
+    olist_order_items:
+      enabled: true
+      source_path: s3a://datapilot-ai-data-practice/processed/silver/olist_order_items
+      target_table: olist_order_items
+      keys:
+        - order_id
+        - order_item_id
+      validate_source_duplicates: true
+
+
+    # =====================================================
+    # Order Payments
+    # =====================================================
+
+    olist_order_payments:
+      enabled: true
+      source_path: s3a://datapilot-ai-data-practice/processed/silver/olist_order_payments
+      target_table: olist_order_payments
+      keys:
+        - order_id
+        - payment_sequential
+      validate_source_duplicates: true
+
+
+    # =====================================================
+    # Order Reviews
+    # =====================================================
+
+    olist_order_reviews:
+      enabled: true
+      source_path: s3a://datapilot-ai-data-practice/processed/silver/olist_order_reviews
+      target_table: olist_order_reviews
+      keys:
+        - review_id
+        - order_id
+      validate_source_duplicates: true
+
+
+    # =====================================================
+    # Orders
+    # =====================================================
+
+    olist_orders:
+      enabled: true
+      source_path: s3a://datapilot-ai-data-practice/processed/silver/olist_orders
+      target_table: olist_orders
+      keys:
+        - order_id
+      validate_source_duplicates: true
+
+
+    # =====================================================
+    # Product Category Translation
+    # =====================================================
+
+    olist_product_category_translation:
+      enabled: true
+      source_path: s3a://datapilot-ai-data-practice/processed/silver/olist_product_category_translation
+      target_table: olist_product_category_translation
+      keys:
+        - product_category_name
+      validate_source_duplicates: true
+
+
+    # =====================================================
+    # Products
+    # =====================================================
+
+    olist_products:
+      enabled: true
+      source_path: s3a://datapilot-ai-data-practice/processed/silver/olist_products
+      target_table: olist_products
+      keys:
+        - product_id
+      validate_source_duplicates: true
+
+
+    # =====================================================
+    # Sellers
+    # =====================================================
+
+    olist_sellers:
+      enabled: true
+      source_path: s3a://datapilot-ai-data-practice/processed/silver/olist_sellers
+      target_table: olist_sellers
+      keys:
+        - seller_id
+      validate_source_duplicates: true
