@@ -124,6 +124,13 @@ services:
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
       AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow:8080/execution/"
       AIRFLOW__API_AUTH__JWT_SECRET: "QGZC7j8rUrJj1ndiMYhlznvt8vol2tj1bNiALPcGKy-jtX_ahMk_Uku5ivBjZFFyWrmkucTk0X57RTgYgCci_g"
+      MCP_SERVER_URL: "http://mcp-server:8000/mcp"
+      PYTHONPATH: "/opt/datapilot"
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT}
+      DATAPILOT_ENV: ${DATAPILOT_ENV}
 
     volumes:
       - ./dags:/opt/airflow/dags
@@ -309,6 +316,51 @@ services:
 
     command: tail -f /dev/null
 
+  # ============================================================
+  # DataPilot MCP Server
+  # ============================================================
+
+  mcp-server:
+    build:
+      context: .
+      dockerfile: mcp_server/Dockerfile
+
+    container_name: datapilot-mcp-server
+
+    depends_on:
+      - spark-master
+      - spark-worker
+
+    environment:
+      HOME: /opt/spark
+
+      AWS_PROFILE: datapilot
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_SHARED_CREDENTIALS_FILE: /opt/spark/.aws/credentials
+      AWS_CONFIG_FILE: /opt/spark/.aws/config
+
+      MCP_SERVER_HOST: 0.0.0.0
+      MCP_SERVER_PORT: "8000"
+
+    volumes:
+      - ./mcp_server:/opt/datapilot/mcp_server
+      - ./spark:/opt/spark-apps
+      - ./config:/opt/datapilot/config:ro
+      - ./results:/opt/datapilot/results
+      - ~/.aws:/opt/spark/.aws:ro
+
+    ports:
+      - "8000:8000"
+
+    command:
+      - python3
+      - -m
+      - uvicorn
+      - mcp_server.server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
 
 # ==============================================================
 # Named Volumes

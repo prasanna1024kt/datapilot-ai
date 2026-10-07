@@ -2,6 +2,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.server import MCPServer
 
 
@@ -13,6 +14,51 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 DQ_RESULTS_DIR = PROJECT_ROOT / "results" / "dq"
 RCA_RESULTS_DIR = PROJECT_ROOT / "results" / "rca"
+
+
+# ---------------------------------------------------------
+# Validation helpers
+# ---------------------------------------------------------
+
+def validate_dataset(dataset: str) -> None:
+    """
+    Validate dataset name before using it in file paths
+    or Spark commands.
+    """
+
+    if not dataset:
+        raise ValueError(
+            "Dataset name cannot be empty."
+        )
+
+    if (
+        "/" in dataset
+        or "\\" in dataset
+        or ".." in dataset
+    ):
+        raise ValueError(
+            "Invalid dataset name."
+        )
+
+
+def validate_column(column: str) -> None:
+    """
+    Validate column name before using it in Spark commands.
+    """
+
+    if not column:
+        raise ValueError(
+            "Column name cannot be empty."
+        )
+
+    if (
+        "/" in column
+        or "\\" in column
+        or ".." in column
+    ):
+        raise ValueError(
+            "Invalid column name."
+        )
 
 
 # ---------------------------------------------------------
@@ -40,19 +86,7 @@ def get_dq_result(dataset: str) -> dict:
     Retrieve the Data Quality result for a dataset.
     """
 
-    if not dataset:
-        raise ValueError(
-            "Dataset name cannot be empty."
-        )
-
-    if (
-        "/" in dataset
-        or "\\" in dataset
-        or ".." in dataset
-    ):
-        raise ValueError(
-            "Invalid dataset name."
-        )
+    validate_dataset(dataset)
 
     result_file = (
         DQ_RESULTS_DIR
@@ -78,33 +112,18 @@ def get_dq_result(dataset: str) -> dict:
 @mcp.tool(
     title="Inspect Bronze Data",
 )
-def inspect_bronze(dataset: str,column: str,minimum: float,maximum: float,) -> dict:
+def inspect_bronze(
+    dataset: str,
+    column: str,
+    minimum: float,
+    maximum: float,
+) -> dict:
     """
     Inspect Bronze data using the existing Spark cluster.
     """
 
-    if not dataset:
-        raise ValueError(
-            "Dataset name cannot be empty."
-        )
-
-    if not column:
-        raise ValueError(
-            "Column name cannot be empty."
-        )
-
-    # Prevent path traversal.
-    if (
-        "/" in dataset
-        or "\\" in dataset
-        or ".." in dataset
-        or "/" in column
-        or "\\" in column
-        or ".." in column
-    ):
-        raise ValueError(
-            "Invalid dataset or column name."
-        )
+    validate_dataset(dataset)
+    validate_column(column)
 
     output_filename = (
         f"mcp_bronze_{dataset}.json"
@@ -121,16 +140,9 @@ def inspect_bronze(dataset: str,column: str,minimum: float,maximum: float,) -> d
     )
 
     command = [
-        "docker-compose",
-        "exec",
-        "-T",
-        "airflow-scheduler",
-
         "/opt/spark/bin/spark-submit",
-
         "--master",
         "spark://spark-master:7077",
-
         "/opt/spark-apps/jobs/inspect_bronze.py",
 
         "--dataset",
@@ -154,6 +166,7 @@ def inspect_bronze(dataset: str,column: str,minimum: float,maximum: float,) -> d
         cwd=str(PROJECT_ROOT),
         capture_output=True,
         text=True,
+        check=False,
     )
 
     if process.returncode != 0:
@@ -175,35 +188,26 @@ def inspect_bronze(dataset: str,column: str,minimum: float,maximum: float,) -> d
     ) as file:
         return json.load(file)
 
+
+# ---------------------------------------------------------
+# Tool: inspect_silver
+# ---------------------------------------------------------
+
 @mcp.tool(
     title="Inspect Silver Data",
 )
-def inspect_silver(dataset: str,column: str,minimum: float,maximum: float,) -> dict:
+def inspect_silver(
+    dataset: str,
+    column: str,
+    minimum: float,
+    maximum: float,
+) -> dict:
     """
     Inspect Silver data using the existing Spark cluster.
     """
 
-    if not dataset:
-        raise ValueError(
-            "Dataset name cannot be empty."
-        )
-
-    if not column:
-        raise ValueError(
-            "Column name cannot be empty."
-        )
-
-    if (
-        "/" in dataset
-        or "\\" in dataset
-        or ".." in dataset
-        or "/" in column
-        or "\\" in column
-        or ".." in column
-    ):
-        raise ValueError(
-            "Invalid dataset or column name."
-        )
+    validate_dataset(dataset)
+    validate_column(column)
 
     output_filename = (
         f"mcp_silver_{dataset}.json"
@@ -220,22 +224,23 @@ def inspect_silver(dataset: str,column: str,minimum: float,maximum: float,) -> d
     )
 
     command = [
-        "docker-compose",
-        "exec",
-        "-T",
-        "airflow-scheduler",
         "/opt/spark/bin/spark-submit",
         "--master",
         "spark://spark-master:7077",
         "/opt/spark-apps/jobs/inspect_silver.py",
+
         "--dataset",
         dataset,
+
         "--column",
         column,
+
         "--minimum",
         str(minimum),
+
         "--maximum",
         str(maximum),
+
         "--output",
         container_output,
     ]
@@ -245,6 +250,7 @@ def inspect_silver(dataset: str,column: str,minimum: float,maximum: float,) -> d
         cwd=str(PROJECT_ROOT),
         capture_output=True,
         text=True,
+        check=False,
     )
 
     if process.returncode != 0:
@@ -265,13 +271,27 @@ def inspect_silver(dataset: str,column: str,minimum: float,maximum: float,) -> d
         encoding="utf-8",
     ) as file:
         return json.load(file)
-    
 
-@mcp.tool(title="Get Invalid Records")
-def get_invalid_records(dataset: str,column: str,minimum: float,maximum: float,) -> dict:
+
+# ---------------------------------------------------------
+# Tool: get_invalid_records
+# ---------------------------------------------------------
+
+@mcp.tool(
+    title="Get Invalid Records",
+)
+def get_invalid_records(
+    dataset: str,
+    column: str,
+    minimum: float,
+    maximum: float,
+) -> dict:
     """
     Retrieve actual invalid Bronze records for RCA investigation.
     """
+
+    validate_dataset(dataset)
+    validate_column(column)
 
     output_file = (
         PROJECT_ROOT
@@ -282,15 +302,10 @@ def get_invalid_records(dataset: str,column: str,minimum: float,maximum: float,)
 
     output_file.parent.mkdir(
         parents=True,
-        exist_ok=True
+        exist_ok=True,
     )
 
     command = [
-        "docker-compose",
-        "exec",
-        "-T",
-        "airflow-scheduler",
-
         "/opt/spark/bin/spark-submit",
 
         "--master",
@@ -311,30 +326,60 @@ def get_invalid_records(dataset: str,column: str,minimum: float,maximum: float,)
         str(maximum),
 
         "--output",
-        f"/opt/datapilot/results/rca/mcp_invalid_{dataset}.json",
+        (
+            f"/opt/datapilot/results/rca/"
+            f"mcp_invalid_{dataset}.json"
+        ),
     ]
 
-    subprocess.run(
+    process = subprocess.run(
         command,
-        check=True
+        cwd=str(PROJECT_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
-    with open(
-        output_file,
-        "r"
+    if process.returncode != 0:
+        raise RuntimeError(
+            "Spark invalid-record inspection failed.\n\n"
+            f"STDOUT:\n{process.stdout}\n\n"
+            f"STDERR:\n{process.stderr}"
+        )
+
+    if not output_file.exists():
+        raise RuntimeError(
+            "Spark job completed, but the invalid-record "
+            f"result file was not found: {output_file}"
+        )
+
+    with output_file.open(
+        "r",
+        encoding="utf-8",
     ) as file:
-
         return json.load(file)
-    
 
-@mcp.tool(title="Approve Remediation")
-def approve_remediation(dataset: str,action: str,approved_by: str,) -> dict:
+
+# ---------------------------------------------------------
+# Tool: Approve Remediation
+# ---------------------------------------------------------
+
+@mcp.tool(
+    title="Approve Remediation",
+)
+def approve_remediation(
+    dataset: str,
+    action: str,
+    approved_by: str,
+) -> dict:
     """
     Approve a remediation plan.
 
     This tool records approval only.
     It does not execute the remediation.
     """
+
+    validate_dataset(dataset)
 
     approval_path = (
         PROJECT_ROOT
@@ -351,26 +396,45 @@ def approve_remediation(dataset: str,action: str,approved_by: str,) -> dict:
         "execution_authorized": True,
     }
 
-    approval_path.parent.mkdir(parents=True, exist_ok=True)
+    approval_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    with open(approval_path, "w") as file:
+    with approval_path.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
         json.dump(
             approval,
             file,
-            indent=2
+            indent=2,
         )
 
     return approval
 
 
-@mcp.tool(title="Reject Remediation")
-def reject_remediation(dataset: str,action: str,rejected_by: str,reason: str,) -> dict:
+# ---------------------------------------------------------
+# Tool: Reject Remediation
+# ---------------------------------------------------------
+
+@mcp.tool(
+    title="Reject Remediation",
+)
+def reject_remediation(
+    dataset: str,
+    action: str,
+    rejected_by: str,
+    reason: str,
+) -> dict:
     """
     Reject a remediation plan.
 
     This tool records rejection only.
     It does not execute anything.
     """
+
+    validate_dataset(dataset)
 
     approval_path = (
         PROJECT_ROOT
@@ -388,18 +452,38 @@ def reject_remediation(dataset: str,action: str,rejected_by: str,reason: str,) -
         "execution_authorized": False,
     }
 
-    approval_path.parent.mkdir(parents=True,exist_ok=True)
+    approval_path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    with open(approval_path, "w") as file:
+    with approval_path.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
         json.dump(
             approval,
             file,
-            indent=2
+            indent=2,
         )
 
-    return approval    
+    return approval
+
+
 # ---------------------------------------------------------
 # ASGI application
 # ---------------------------------------------------------
 
-app = mcp.streamable_http_app()
+transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=True,
+    allowed_hosts=[
+        "127.0.0.1:8000",
+        "localhost:8000",
+        "mcp-server:8000",
+    ],
+)
+
+
+app = mcp.streamable_http_app(
+    transport_security=transport_security,
+)

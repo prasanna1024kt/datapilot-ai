@@ -1,9 +1,6 @@
 import argparse
-
 import yaml
-
 from pyspark.sql import SparkSession
-
 from framework.dq.engine import DQEngine
 import json 
 
@@ -63,7 +60,7 @@ def save_dq_results(table, results, overall_status):
         "checks": results,
     }
 
-    with open(path, "w") as file:
+    with open(path, "w",encoding="utf-8") as file:
         json.dump(
             payload,
             file,

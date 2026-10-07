@@ -1,14 +1,15 @@
 import asyncio
 import json
 from typing import Any
-
+import os
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 
-MCP_SERVER_URL = "http://127.0.0.1:8000/mcp"
-
-
+MCP_SERVER_URL = os.getenv(
+    "MCP_SERVER_URL",
+    "http://127.0.0.1:8000/mcp",
+)
 def extract_tool_result(result: Any) -> Any:
     """
     Extract the actual tool payload from an MCP CallToolResult.

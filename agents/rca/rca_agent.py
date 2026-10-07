@@ -1,11 +1,9 @@
 import argparse
 import json
 import os
-
 from dotenv import load_dotenv
 from langsmith import traceable, tracing_context
 from openai import OpenAI
-
 from agents.rca.mcp_client import call_tool
 
 

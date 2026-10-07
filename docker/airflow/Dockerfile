@@ -33,4 +33,8 @@ RUN curl -fL \
 USER airflow
 
 RUN pip install --no-cache-dir \
-    apache-airflow-providers-apache-spark
+    apache-airflow-providers-apache-spark \
+    openai \
+    python-dotenv \
+    langsmith \
+    mcp==2.2.0
