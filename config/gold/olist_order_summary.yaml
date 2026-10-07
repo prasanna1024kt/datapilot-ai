@@ -1,5 +1,5 @@
 source:
-  type: silver
+  type: gold
 
   tables:
     orders: olist_orders

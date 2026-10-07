@@ -125,7 +125,7 @@ services:
       AIRFLOW__CORE__EXECUTION_API_SERVER_URL: "http://airflow:8080/execution/"
       AIRFLOW__API_AUTH__JWT_SECRET: "QGZC7j8rUrJj1ndiMYhlznvt8vol2tj1bNiALPcGKy-jtX_ahMk_Uku5ivBjZFFyWrmkucTk0X57RTgYgCci_g"
       MCP_SERVER_URL: "http://mcp-server:8000/mcp"
-      PYTHONPATH: "/opt/datapilot"
+      PYTHONPATH: "/opt/datapilot:/opt/spark-apps"
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       LANGSMITH_API_KEY: ${LANGSMITH_API_KEY}
       LANGSMITH_TRACING: ${LANGSMITH_TRACING}
