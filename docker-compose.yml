@@ -303,7 +303,6 @@ services:
 
       AWS_PROFILE: datapilot
       AWS_DEFAULT_REGION: us-east-1
-
       AWS_SHARED_CREDENTIALS_FILE: /opt/spark/.aws/credentials
       AWS_CONFIG_FILE: /opt/spark/.aws/config
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
@@ -313,6 +312,7 @@ services:
       - ./spark:/opt/spark-apps
       - ./config:/opt/datapilot/config:ro
       - ~/.aws:/opt/spark/.aws:ro
+      - ./results:/opt/datapilot/results:ro
 
     command: tail -f /dev/null
 
@@ -333,12 +333,10 @@ services:
 
     environment:
       HOME: /opt/spark
-
       AWS_PROFILE: datapilot
       AWS_DEFAULT_REGION: us-east-1
       AWS_SHARED_CREDENTIALS_FILE: /opt/spark/.aws/credentials
       AWS_CONFIG_FILE: /opt/spark/.aws/config
-
       MCP_SERVER_HOST: 0.0.0.0
       MCP_SERVER_PORT: "8000"
 
@@ -348,6 +346,8 @@ services:
       - ./config:/opt/datapilot/config:ro
       - ./results:/opt/datapilot/results
       - ~/.aws:/opt/spark/.aws:ro
+      - ./agents:/opt/datapilot/agents:ro
+
 
     ports:
       - "8000:8000"

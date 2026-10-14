@@ -125,7 +125,6 @@ RCA_SCHEMA = {
                 "action": {
                     "type": "string",
                     "enum": [
-                        "SOURCE_CORRECTION",
                         "QUARANTINE_RECORDS",
                         "TRANSFORMATION_FIX",
                         "UPDATE_DQ_RULE",

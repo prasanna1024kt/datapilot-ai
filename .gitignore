@@ -11,7 +11,7 @@ logs/
 
 # AWS credentials
 .aws/
-
+.DS_Store
 # Python
 .venv/
 venv/

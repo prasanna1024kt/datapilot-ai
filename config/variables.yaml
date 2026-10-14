@@ -14,6 +14,7 @@ storage:
     bronze: processed/bronze
     silver: processed/silver
     gold: processed/gold
+    quarantine: processed/quarantine
 
   formats:
     raw: csv

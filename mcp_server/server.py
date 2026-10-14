@@ -1,7 +1,7 @@
 import json
 import subprocess
 from pathlib import Path
-
+import os
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.server import MCPServer
 
@@ -78,9 +78,7 @@ mcp = MCPServer(
 # Tool: get_dq_result
 # ---------------------------------------------------------
 
-@mcp.tool(
-    title="Get DQ Result",
-)
+@mcp.tool(title="Get DQ Result")
 def get_dq_result(dataset: str) -> dict:
     """
     Retrieve the Data Quality result for a dataset.
@@ -94,14 +92,9 @@ def get_dq_result(dataset: str) -> dict:
     )
 
     if not result_file.exists():
-        raise FileNotFoundError(
-            f"DQ result not found for dataset: {dataset}"
-        )
+        raise FileNotFoundError(f"DQ result not found for dataset: {dataset}")
 
-    with result_file.open(
-        "r",
-        encoding="utf-8",
-    ) as file:
+    with result_file.open("r", encoding="utf-8") as file:
         return json.load(file)
 
 
@@ -109,15 +102,8 @@ def get_dq_result(dataset: str) -> dict:
 # Tool: inspect_bronze
 # ---------------------------------------------------------
 
-@mcp.tool(
-    title="Inspect Bronze Data",
-)
-def inspect_bronze(
-    dataset: str,
-    column: str,
-    minimum: float,
-    maximum: float,
-) -> dict:
+@mcp.tool(title="Inspect Bronze Data")
+def inspect_bronze(dataset: str, column: str, minimum: float, maximum: float) -> dict:
     """
     Inspect Bronze data using the existing Spark cluster.
     """
@@ -125,14 +111,9 @@ def inspect_bronze(
     validate_dataset(dataset)
     validate_column(column)
 
-    output_filename = (
-        f"mcp_bronze_{dataset}.json"
-    )
+    output_filename = (f"mcp_bronze_{dataset}.json")
 
-    container_output = (
-        "/opt/datapilot/results/rca/"
-        f"{output_filename}"
-    )
+    container_output = ("/opt/datapilot/results/rca/"f"{output_filename}")
 
     host_output = (
         RCA_RESULTS_DIR
@@ -182,10 +163,7 @@ def inspect_bronze(
             f"file was not found: {host_output}"
         )
 
-    with host_output.open(
-        "r",
-        encoding="utf-8",
-    ) as file:
+    with host_output.open("r", encoding="utf-8") as file:
         return json.load(file)
 
 
@@ -193,15 +171,8 @@ def inspect_bronze(
 # Tool: inspect_silver
 # ---------------------------------------------------------
 
-@mcp.tool(
-    title="Inspect Silver Data",
-)
-def inspect_silver(
-    dataset: str,
-    column: str,
-    minimum: float,
-    maximum: float,
-) -> dict:
+@mcp.tool(title="Inspect Silver Data")
+def inspect_silver(dataset: str, column: str, minimum: float, maximum: float) -> dict:
     """
     Inspect Silver data using the existing Spark cluster.
     """
@@ -209,14 +180,9 @@ def inspect_silver(
     validate_dataset(dataset)
     validate_column(column)
 
-    output_filename = (
-        f"mcp_silver_{dataset}.json"
-    )
+    output_filename = (f"mcp_silver_{dataset}.json")
 
-    container_output = (
-        "/opt/datapilot/results/rca/"
-        f"{output_filename}"
-    )
+    container_output = ("/opt/datapilot/results/rca/"f"{output_filename}")
 
     host_output = (
         RCA_RESULTS_DIR
@@ -266,10 +232,7 @@ def inspect_silver(
             f"file was not found: {host_output}"
         )
 
-    with host_output.open(
-        "r",
-        encoding="utf-8",
-    ) as file:
+    with host_output.open("r", encoding="utf-8") as file:
         return json.load(file)
 
 
@@ -277,15 +240,8 @@ def inspect_silver(
 # Tool: get_invalid_records
 # ---------------------------------------------------------
 
-@mcp.tool(
-    title="Get Invalid Records",
-)
-def get_invalid_records(
-    dataset: str,
-    column: str,
-    minimum: float,
-    maximum: float,
-) -> dict:
+@mcp.tool(title="Get Invalid Records")
+def get_invalid_records(dataset: str, column: str, minimum: float, maximum: float) -> dict:
     """
     Retrieve actual invalid Bronze records for RCA investigation.
     """
@@ -353,10 +309,7 @@ def get_invalid_records(
             f"result file was not found: {output_file}"
         )
 
-    with output_file.open(
-        "r",
-        encoding="utf-8",
-    ) as file:
+    with output_file.open("r", encoding="utf-8") as file:
         return json.load(file)
 
 
@@ -364,22 +317,52 @@ def get_invalid_records(
 # Tool: Approve Remediation
 # ---------------------------------------------------------
 
-@mcp.tool(
-    title="Approve Remediation",
-)
-def approve_remediation(
-    dataset: str,
-    action: str,
-    approved_by: str,
-) -> dict:
-    """
-    Approve a remediation plan.
 
-    This tool records approval only.
-    It does not execute the remediation.
+@mcp.tool(title="Approve Remediation")
+def approve_remediation(dataset: str, action: str, approved_by: str) -> dict:
+    """
+    Approve a pending remediation plan.
+    Records approval only; does not execute remediation.
     """
 
     validate_dataset(dataset)
+
+    if action != "QUARANTINE_RECORDS":
+        raise ValueError(
+            f"Unsupported remediation action: {action}"
+        )
+
+    if not approved_by or not approved_by.strip():
+        raise ValueError("Approver identity is required.")
+
+    remediation_path = (
+        PROJECT_ROOT
+        / "results"
+        / "remediation"
+        / f"{dataset}.json"
+    )
+
+    if not remediation_path.exists():
+        raise FileNotFoundError(
+            f"Remediation plan not found: {remediation_path}"
+        )
+
+    with remediation_path.open("r", encoding="utf-8") as file:
+        plan = json.load(file)
+
+    if plan.get("dataset") != dataset:
+        raise ValueError("Remediation plan dataset mismatch.")
+
+    if plan.get("action") != action:
+        raise ValueError("Remediation plan action mismatch.")
+
+    if plan.get("status") != "PENDING_APPROVAL":
+        raise ValueError(
+            f"Plan is not pending approval: {plan.get('status')}"
+        )
+
+    if plan.get("requires_approval") is not True:
+        raise ValueError("Plan does not require approval.")
 
     approval_path = (
         PROJECT_ROOT
@@ -392,41 +375,25 @@ def approve_remediation(
         "dataset": dataset,
         "action": action,
         "status": "APPROVED",
-        "approved_by": approved_by,
+        "approved_by": approved_by.strip(),
         "execution_authorized": True,
     }
 
-    approval_path.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    approval_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with approval_path.open(
-        "w",
-        encoding="utf-8",
-    ) as file:
-        json.dump(
-            approval,
-            file,
-            indent=2,
-        )
+    with approval_path.open("w", encoding="utf-8") as file:
+        json.dump(approval, file, indent=2)
 
     return approval
+
 
 
 # ---------------------------------------------------------
 # Tool: Reject Remediation
 # ---------------------------------------------------------
 
-@mcp.tool(
-    title="Reject Remediation",
-)
-def reject_remediation(
-    dataset: str,
-    action: str,
-    rejected_by: str,
-    reason: str,
-) -> dict:
+@mcp.tool(title="Reject Remediation")
+def reject_remediation(dataset: str, action: str, rejected_by: str, reason: str) -> dict:
     """
     Reject a remediation plan.
 
@@ -457,17 +424,127 @@ def reject_remediation(
         exist_ok=True,
     )
 
-    with approval_path.open(
-        "w",
-        encoding="utf-8",
-    ) as file:
-        json.dump(
-            approval,
-            file,
-            indent=2,
-        )
+    with approval_path.open("w", encoding="utf-8") as file:
+        json.dump(approval, file, indent=2)
 
     return approval
+
+
+# ---------------------------------------------------------
+# Tool: Execute Remediation
+# ---------------------------------------------------------
+
+@mcp.tool(title="Execute Remediation")
+def execute_remediation(dataset: str, action: str) -> dict:
+    """
+    Execute an approved remediation plan.
+
+    The existing executor enforces approval and plan validation.
+    Quarantine execution remains DRY_RUN; no S3 data is modified.
+    """
+    validate_dataset(dataset)
+
+    if dataset != "olist_order_payments":
+        raise ValueError(
+            "Execution is currently restricted to "
+            "olist_order_payments."
+        )
+
+    if action != "QUARANTINE_RECORDS":
+        raise ValueError(
+            "Only QUARANTINE_RECORDS is currently supported."
+        )
+
+    executor_path = (
+        PROJECT_ROOT / "agents" / "remediation" / "executor.py"
+    )
+
+    if not executor_path.is_file():
+        raise FileNotFoundError(
+            f"Remediation executor not found: {executor_path}"
+        )
+
+    try:
+        completed = subprocess.run(
+            [
+                "python3",
+                str(executor_path),
+                "--dataset",
+                dataset,
+                "--action",
+                action,
+            ],
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            "Remediation executor timed out after 60 seconds."
+        ) from exc
+
+    if completed.returncode != 0:
+        # Avoid returning arbitrary process output to the MCP client.
+        raise RuntimeError(
+            "Remediation execution failed. "
+            f"Exit code: {completed.returncode}. "
+            "Inspect the MCP server logs for details."
+        )
+
+    execution_result_path = (
+        PROJECT_ROOT
+        / "results"
+        / "remediation"
+        / f"{dataset}_execution.json"
+    )
+
+    if not execution_result_path.is_file():
+        raise RuntimeError(
+            "Executor finished without producing an execution record."
+        )
+
+    with execution_result_path.open("r", encoding="utf-8") as file:
+        result = json.load(file)
+
+    execution = result.get("execution", {})
+
+    if (
+        result.get("dataset") != dataset
+        or result.get("action") != action
+        or execution.get("mode") != "DRY_RUN"
+        or execution.get("executed") is not False
+        or execution.get("source_modification") is not False
+    ):
+        raise RuntimeError(
+            "Execution record failed dry-run safety validation."
+        )
+
+    response = {
+        "status": "DRY_RUN_COMPLETED",
+        "dataset": dataset,
+        "action": action,
+        "executed": False,
+        "s3_write_performed": False,
+        "source_modified": False,
+        "message": execution.get("message"),
+        "audit_file": str(execution_result_path),
+    }
+
+    # Preserve the executor audit and add the MCP response.
+    result["mcp_response"] = response
+
+    temp_path = execution_result_path.with_suffix(".json.tmp")
+
+    with temp_path.open("w", encoding="utf-8") as file:
+        json.dump(result, file, indent=2)
+        file.write("\n")
+        file.flush()
+        os.fsync(file.fileno())
+
+    temp_path.replace(execution_result_path)
+    return response
 
 
 # ---------------------------------------------------------
