@@ -4,6 +4,7 @@ from pathlib import Path
 import subprocess
 from datetime import datetime, timezone
 import uuid
+import os
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 APPROVALS_DIR = PROJECT_ROOT / "results" / "approvals"
@@ -172,21 +173,84 @@ def execute_quarantine(dataset: str, remediation_plan: dict) -> dict:
     return execution_result
 
 
+def write_execution_history(result: dict) -> Path:
+    """Persist one execution audit without overwriting an existing record."""
+
+    execution = result.get("execution", {})
+    execution_id = execution.get("execution_id")
+
+    if not isinstance(execution_id, str) or not execution_id:
+        raise ValueError("Execution audit requires a valid execution_id.")
+
+    if any(
+        char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+        for char in execution_id
+    ):
+        raise ValueError("Execution ID contains unsupported characters.")
+
+    history_dir = REMEDIATION_DIR / "history"
+    history_dir.mkdir(parents=True, exist_ok=True)
+
+    history_path = history_dir / f"{execution_id}.json"
+    temp_path = history_dir / f".{execution_id}.{uuid.uuid4().hex}.tmp"
+
+    try:
+        with temp_path.open("x", encoding="utf-8") as file:
+            json.dump(result, file, indent=2)
+            file.write("\n")
+            file.flush()
+            os.fsync(file.fileno())
+
+        # Atomic publication; fails if the destination already exists.
+        os.link(temp_path, history_path)
+        return history_path
+
+    finally:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+
+def write_validation_failure(
+    dataset: str,
+    action: str,
+    execution_id: str,
+    stage: str,
+    error: Exception,
+) -> Path:
+    """Record a validation failure without invoking Spark or modifying data."""
+    result = {
+        "dataset": dataset,
+        "action": action,
+        "execution": {
+            "action": action,
+            "dataset": dataset,
+            "execution_id": execution_id,
+            "status": "FAILED",
+            "failure_stage": stage,
+            "message": f"Validation failed during {stage}.",
+            "error": f"{type(error).__name__}: {error}",
+            "mode": "DRY_RUN",
+            "executed": False,
+            "source_modification": False,
+            "s3_write_performed": False,
+        },
+    }
+    try:
+        return write_execution_history(result)
+    except Exception as audit_error:
+        # Preserve the original validation exception as the primary error.
+        if hasattr(error, "add_note"):
+            error.add_note(
+                "Additionally, writing the validation-failure audit failed: "
+                f"{type(audit_error).__name__}: {audit_error}"
+            )
+        raise error from audit_error
+
+
 def execute(dataset: str, action: str) -> dict:
-    import uuid
-    from datetime import datetime, timezone
-
-    remediation_path = REMEDIATION_DIR / f"{dataset}.json"
-    approval_path = APPROVALS_DIR / f"{dataset}.json"
-
-    remediation = load_json(remediation_path)
-    approval = load_json(approval_path)
-
-    validate_action(action)
-    validate_approval(approval, dataset, action)
-    validate_remediation_plan(remediation, dataset, action)
-
-    dq_validation = validate_dq_failure(dataset)
+    if dataset != "olist_order_payments":
+        raise RuntimeError("Dataset is not enabled for remediation.")
 
     execution_id = (
         f"quarantine-{dataset}-"
@@ -194,19 +258,82 @@ def execute(dataset: str, action: str) -> dict:
         f"{uuid.uuid4().hex[:8]}"
     )
 
+    remediation_path = REMEDIATION_DIR / f"{dataset}.json"
+    approval_path = APPROVALS_DIR / f"{dataset}.json"
+
+    try:
+        remediation = load_json(remediation_path)
+        approval = load_json(approval_path)
+    except Exception as exc:
+        write_validation_failure(
+            dataset, action, execution_id, "input_loading", exc
+        )
+        raise
+
+    validations = [
+        ("action_validation", lambda: validate_action(action)),
+        ("approval_validation", lambda: validate_approval(approval, dataset, action)),
+        ("plan_validation", lambda: validate_remediation_plan(remediation, dataset, action)),
+        ("dq_validation", lambda: validate_dq_failure(dataset)),
+    ]
+
+    dq_validation = None
+    for stage, validate in validations:
+        try:
+            validation_result = validate()
+            if stage == "dq_validation":
+                dq_validation = validation_result
+        except Exception as exc:
+            write_validation_failure(
+                dataset, action, execution_id, stage, exc
+            )
+            raise
+
     if action != "QUARANTINE_RECORDS":
         raise RuntimeError(f"No executor implemented for action: {action}")
 
-    spark_report = run_quarantine_dry_run(
-        dataset=dataset,
-        dq_validation=dq_validation,
-        execution_id=execution_id,
-    )
+    try:
+        spark_report = run_quarantine_dry_run(
+            dataset=dataset,
+            dq_validation=dq_validation,
+            execution_id=execution_id,
+        )
+    except Exception as exc:
+        failure_result = {
+            "dataset": dataset,
+            "action": action,
+            "approval": approval,
+            "dq_validation": dq_validation,
+            "execution": {
+                "action": action,
+                "dataset": dataset,
+                "executed": False,
+                "mode": "DRY_RUN",
+                "execution_id": execution_id,
+                "status": "FAILED",
+                "message": "Spark quarantine dry-run failed.",
+                "error": f"{type(exc).__name__}: {exc}",
+                "source_modification": False,
+                "s3_write_performed": False,
+            },
+        }
+
+        try:
+            write_execution_history(failure_result)
+        except Exception as audit_error:
+            if hasattr(exc, "add_note"):
+                exc.add_note(
+                    "Additionally, writing the Spark-failure audit failed: "
+                    f"{type(audit_error).__name__}: {audit_error}"
+                )
+            raise exc from audit_error
+        raise
 
     execution_result = {
         "action": action,
         "dataset": dataset,
         "executed": False,
+        "status": "VALIDATED",
         "mode": "DRY_RUN",
         "execution_id": execution_id,
         "message": (
@@ -226,22 +353,36 @@ def execute(dataset: str, action: str) -> dict:
         "execution": execution_result,
     }
 
+    history_path = write_execution_history(result)
+
     output_path = REMEDIATION_DIR / f"{dataset}_execution.json"
-    temp_path = output_path.with_suffix(".json.tmp")
+    temp_path = output_path.with_name(
+        f".{output_path.name}.{uuid.uuid4().hex}.tmp"
+    )
 
-    with temp_path.open("w", encoding="utf-8") as file:
-        json.dump(result, file, indent=2)
-        file.write("\n")
-        file.flush()
-        import os
-        os.fsync(file.fileno())
+    try:
+        with temp_path.open("x", encoding="utf-8") as file:
+            json.dump(result, file, indent=2)
+            file.write("\n")
+            file.flush()
+            os.fsync(file.fileno())
 
-    temp_path.replace(output_path)
+        os.replace(temp_path, output_path)
+
+    except Exception as exc:
+        raise RuntimeError(
+            "Dry-run completed and per-execution history was recorded at "
+            f"{history_path}, but latest-execution summary publication failed: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+    finally:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
 
     return result
-
-
-
 
 def run_quarantine_dry_run(dataset: str,dq_validation: dict,execution_id: str,) -> dict:
     """Run and validate the Spark quarantine job in dry-run mode."""
@@ -253,9 +394,6 @@ def run_quarantine_dry_run(dataset: str,dq_validation: dict,execution_id: str,) 
 
     if dq_validation.get("validated") is not True:
         raise RuntimeError("DQ validation has not passed.")
-
-    if dq_validation.get("invalid_count") != 2:
-        raise RuntimeError("Unexpected invalid record count.")
 
     if dq_validation.get("invalid_count") != 2:
         raise RuntimeError("Unexpected invalid record count.")

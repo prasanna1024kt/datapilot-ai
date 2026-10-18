@@ -1,0 +1,18 @@
+
+dataset: olist_order_payments
+
+quarantine:
+  enabled: true
+  catalog: glue_catalog
+  database: datapilot
+  table: olist_order_payments_quarantine
+  format: iceberg
+
+  source_layer: silver
+  target_layer: quarantine
+
+  keys:
+    - order_id
+    - payment_sequential
+
+  validate_source_duplicates: true

@@ -1,0 +1,12 @@
+quarantine:
+  catalog: glue_catalog
+  database: datapilot
+  tables:
+    olist_order_payments:
+      enabled: true
+      source_path: s3a://datapilot-ai-data-practice/processed/silver/olist_order_payments
+      target_table: olist_order_payments_quarantine
+      keys:
+        - order_id
+        - payment_sequential
+      validate_source_duplicates: true
