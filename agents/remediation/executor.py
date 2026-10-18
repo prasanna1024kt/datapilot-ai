@@ -148,6 +148,67 @@ def validate_action(action: str) -> None:
         )
 
 
+def validate_quarantine_config(dataset: str) -> dict:
+    """Validate the quarantine configuration without performing writes."""
+    if dataset != "olist_order_payments":
+        raise RuntimeError("Dataset is not enabled for remediation.")
+
+    config_path = CONFIG_DIR / "quarantine" / f"{dataset}.yaml"
+    if not config_path.is_file():
+        raise FileNotFoundError(
+            f"Quarantine configuration not found: {config_path}"
+        )
+
+    import yaml
+
+    with config_path.open("r", encoding="utf-8") as file:
+        config = yaml.safe_load(file)
+
+    if not isinstance(config, dict):
+        raise RuntimeError("Quarantine configuration must be a YAML mapping.")
+
+    if config.get("dataset") != dataset:
+        raise RuntimeError("Quarantine configuration dataset mismatch.")
+
+    quarantine = config.get("quarantine")
+    if not isinstance(quarantine, dict):
+        raise RuntimeError("Quarantine settings are missing or invalid.")
+
+    expected_values = {
+        "enabled": True,
+        "catalog": "glue_catalog",
+        "database": "datapilot",
+        "table": "olist_order_payments_quarantine",
+        "format": "iceberg",
+        "source_layer": "silver",
+        "target_layer": "quarantine",
+        "keys": ["order_id", "payment_sequential"],
+        "validate_source_duplicates": True,
+    }
+
+    for key, expected in expected_values.items():
+        if quarantine.get(key) != expected:
+            raise RuntimeError(
+                f"Invalid quarantine configuration for '{key}': "
+                f"expected {expected!r}, got {quarantine.get(key)!r}."
+            )
+
+    return {
+        "dataset": dataset,
+        "validated": True,
+        "enabled": True,
+        "catalog": quarantine["catalog"],
+        "database": quarantine["database"],
+        "table": quarantine["table"],
+        "format": quarantine["format"],
+        "source_layer": quarantine["source_layer"],
+        "target_layer": quarantine["target_layer"],
+        "keys": quarantine["keys"],
+        "validate_source_duplicates": quarantine[
+            "validate_source_duplicates"
+        ],
+    }
+
 def execute_quarantine(dataset: str, remediation_plan: dict) -> dict:
 
     """
@@ -274,15 +335,22 @@ def execute(dataset: str, action: str) -> dict:
         ("action_validation", lambda: validate_action(action)),
         ("approval_validation", lambda: validate_approval(approval, dataset, action)),
         ("plan_validation", lambda: validate_remediation_plan(remediation, dataset, action)),
+        ("quarantine_config_validation", lambda: validate_quarantine_config(dataset)),
         ("dq_validation", lambda: validate_dq_failure(dataset)),
     ]
 
     dq_validation = None
+    quarantine_config = None
+
     for stage, validate in validations:
         try:
             validation_result = validate()
+
             if stage == "dq_validation":
                 dq_validation = validation_result
+            elif stage == "quarantine_config_validation":
+                quarantine_config = validation_result
+
         except Exception as exc:
             write_validation_failure(
                 dataset, action, execution_id, stage, exc
@@ -350,6 +418,7 @@ def execute(dataset: str, action: str) -> dict:
         "action": action,
         "approval": approval,
         "dq_validation": dq_validation,
+        "quarantine_config": quarantine_config,
         "execution": execution_result,
     }
 
