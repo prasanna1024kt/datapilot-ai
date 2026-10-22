@@ -5,10 +5,18 @@ import subprocess
 from datetime import datetime, timezone
 import uuid
 import os
+import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from agents.remediation.plan_fingerprint import validate_plan_fingerprint
+
 APPROVALS_DIR = PROJECT_ROOT / "results" / "approvals"
 REMEDIATION_DIR = PROJECT_ROOT / "results" / "remediation"
+
 
 ALLOWED_EXECUTION_ACTIONS = {
     "QUARANTINE_RECORDS",
@@ -120,7 +128,7 @@ def validate_dq_failure(dataset: str) -> dict:
         "validated": True,
     }
 
-def validate_approval(approval: dict,dataset: str,action: str,) -> None:
+def validate_approval(approval: dict, dataset: str, action: str, remediation: dict) -> None:
 
     if approval.get("dataset") != dataset:
         raise RuntimeError("Approval dataset does not match requested dataset.")
@@ -137,6 +145,16 @@ def validate_approval(approval: dict,dataset: str,action: str,) -> None:
     if approval.get("execution_authorized") is not True:
         raise RuntimeError(
             "Execution is not authorized by the approval record."
+        )
+
+    try:
+        fingerprint = validate_plan_fingerprint(remediation)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+    if approval.get("plan_fingerprint") != fingerprint:
+        raise RuntimeError(
+            "Approval fingerprint does not match the current plan."
         )
 
 
@@ -309,12 +327,8 @@ def write_validation_failure(
         raise error from audit_error
 
 
-def execute(
-    dataset: str,
-    action: str,
-    mode: str = "DRY_RUN",
-    confirm_write: bool = False,
-) -> dict:
+def execute(dataset: str, action: str, mode: str = "DRY_RUN", confirm_write: bool = False) -> dict:
+
     if dataset != "olist_order_payments":
         raise RuntimeError("Dataset is not enabled for remediation.")
     if mode not in {"DRY_RUN", "APPLY"}:
@@ -344,7 +358,7 @@ def execute(
 
     validations = [
         ("action_validation", lambda: validate_action(action)),
-        ("approval_validation", lambda: validate_approval(approval, dataset, action)),
+        ("approval_validation", lambda: validate_approval(approval, dataset, action, remediation)),
         ("plan_validation", lambda: validate_remediation_plan(remediation, dataset, action)),
         ("quarantine_config_validation", lambda: validate_quarantine_config(dataset)),
         ("dq_validation", lambda: validate_dq_failure(dataset)),

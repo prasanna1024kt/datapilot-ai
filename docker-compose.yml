@@ -313,6 +313,10 @@ services:
       - ./config:/opt/datapilot/config:ro
       - ~/.aws:/opt/spark/.aws:ro
       - ./results:/opt/datapilot/results:ro
+      - type: bind
+        source: ./agents
+        target: /opt/datapilot/agents
+        read_only: true
 
     command: tail -f /dev/null
 

@@ -1,8 +1,15 @@
 import argparse
 import json
 from pathlib import Path
+import sys
+from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from agents.remediation.plan_fingerprint import attach_plan_fingerprint
 # =========================================================
 # Remediation Actions
 # =========================================================
@@ -195,43 +202,27 @@ def build_remediation_plan(
     plan = {
         "dataset": rca["dataset"],
 
-        "classification": (
-            rca["classification"]
-        ),
+        "classification": (rca["classification"]),
 
-        "confidence": (
-            rca["confidence"]
-        ),
+        "confidence": (rca["confidence"]),
 
-        "dq_status": (
-            rca["dq_status"]
-        ),
+        "dq_status": (rca["dq_status"]),
 
         "action": action,
 
-        "requires_approval": (
-            remediation["requires_approval"]
-        ),
+        "requires_approval": (remediation["requires_approval"]),
 
         "status": "PENDING_APPROVAL",
 
         "execution_mode": "DRY_RUN",
 
-        "reason": (
-            remediation["reason"]
-        ),
+        "reason": (remediation["reason"]),
 
-        "root_cause": (
-            rca["root_cause"]
-        ),
+        "root_cause": (rca["root_cause"]),
 
-        "recommendation": (
-            rca["recommendation"]
-        ),
+        "recommendation": (rca["recommendation"]),
 
-        "next_actions": (
-            rca["next_actions"]
-        ),
+        "next_actions": (rca["next_actions"]),
 
         # -------------------------------------------------
         # Governance
@@ -262,25 +253,21 @@ def build_remediation_plan(
         }
     }
 
-    return plan
+    return attach_plan_fingerprint(plan)
 # =========================================================
 # Save Plan
 # =========================================================
 
 def save_plan(path: str, plan: dict) -> None:
-
     output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    output_path.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    plan = attach_plan_fingerprint(plan)
 
     with output_path.open("w", encoding="utf-8") as file:
+        json.dump(plan, file, indent=2, ensure_ascii=False, allow_nan=False)
 
-        json.dump(plan, file, indent=2)
-
-    print("\nRemediation plan saved to: " f"{path}")
+    print(f"\nRemediation plan saved to: {path}")
 
 
 # =========================================================

@@ -22,7 +22,14 @@ from pyspark.sql.functions import (
     current_timestamp,
     lit,
 )
+import sys
 
+PROJECT_ROOT = Path("/opt/datapilot")
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from agents.remediation.plan_fingerprint import validate_plan_fingerprint
 
 SUPPORTED_DATASET = "olist_order_payments"
 CHECK_COLUMN = "payment_installments"
