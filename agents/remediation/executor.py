@@ -309,9 +309,20 @@ def write_validation_failure(
         raise error from audit_error
 
 
-def execute(dataset: str, action: str) -> dict:
+def execute(
+    dataset: str,
+    action: str,
+    mode: str = "DRY_RUN",
+    confirm_write: bool = False,
+) -> dict:
     if dataset != "olist_order_payments":
         raise RuntimeError("Dataset is not enabled for remediation.")
+    if mode not in {"DRY_RUN", "APPLY"}:
+        raise RuntimeError("Execution mode must be DRY_RUN or APPLY.")
+    if mode == "APPLY" and confirm_write is not True:
+        raise RuntimeError("APPLY requires explicit --confirm-write.")
+    if mode == "DRY_RUN" and confirm_write:
+        raise RuntimeError("--confirm-write is only valid with --mode APPLY.")
 
     execution_id = (
         f"quarantine-{dataset}-"
@@ -361,12 +372,22 @@ def execute(dataset: str, action: str) -> dict:
         raise RuntimeError(f"No executor implemented for action: {action}")
 
     try:
-        spark_report = run_quarantine_dry_run(
-            dataset=dataset,
-            dq_validation=dq_validation,
-            execution_id=execution_id,
-        )
+        if mode == "DRY_RUN":
+            spark_report = run_quarantine_dry_run(
+                dataset=dataset,
+                dq_validation=dq_validation,
+                execution_id=execution_id,
+            )
+        else:
+            spark_report = run_quarantine_apply(
+                dataset=dataset,
+                dq_validation=dq_validation,
+                execution_id=execution_id,
+            )
     except Exception as exc:
+        # A failed APPLY subprocess can fail after Iceberg has committed. Unless
+        # a successful audit proves otherwise, the write outcome is UNKNOWN.
+        apply_outcome_unknown = mode == "APPLY"
         failure_result = {
             "dataset": dataset,
             "action": action,
@@ -376,13 +397,16 @@ def execute(dataset: str, action: str) -> dict:
                 "action": action,
                 "dataset": dataset,
                 "executed": False,
-                "mode": "DRY_RUN",
+                "mode": mode,
                 "execution_id": execution_id,
-                "status": "FAILED",
-                "message": "Spark quarantine dry-run failed.",
+                "status": "APPLY_OUTCOME_UNKNOWN" if apply_outcome_unknown else "FAILED",
+                "message": (
+                    "Apply did not return a verified success report. Inspect the target table and Spark logs before retrying."
+                    if apply_outcome_unknown else "Spark quarantine dry-run failed."
+                ),
                 "error": f"{type(exc).__name__}: {exc}",
-                "source_modification": False,
-                "s3_write_performed": False,
+                "source_modification": None if apply_outcome_unknown else False,
+                "s3_write_performed": None if apply_outcome_unknown else False,
             },
         }
 
@@ -397,19 +421,21 @@ def execute(dataset: str, action: str) -> dict:
             raise exc from audit_error
         raise
 
+    is_apply = mode == "APPLY"
     execution_result = {
         "action": action,
         "dataset": dataset,
-        "executed": False,
-        "status": "VALIDATED",
-        "mode": "DRY_RUN",
+        "executed": is_apply,
+        "status": "COMMITTED_AND_VERIFIED" if is_apply else "VALIDATED",
+        "mode": mode,
         "execution_id": execution_id,
         "message": (
-            "Spark dry-run validated successfully. "
-            "Actual quarantine writes remain disabled."
+            "Quarantine records were committed and verified. Silver remains unchanged."
+            if is_apply else
+            "Spark dry-run validated successfully. Actual quarantine writes remain disabled."
         ),
         "source_modification": False,
-        "s3_write_performed": False,
+        "s3_write_performed": is_apply,
         "spark_validation": spark_report,
     }
 
@@ -545,6 +571,69 @@ def run_quarantine_dry_run(dataset: str,dq_validation: dict,execution_id: str,) 
     return report
 
 
+def run_quarantine_apply(dataset: str, dq_validation: dict, execution_id: str) -> dict:
+    """Invoke the explicitly confirmed Spark APPLY job and verify its audit."""
+    if dataset != "olist_order_payments":
+        raise RuntimeError("Dataset is not enabled for remediation.")
+    if dq_validation.get("validated") is not True or dq_validation.get("invalid_count") != 2:
+        raise RuntimeError("DQ validation is not the expected approved result.")
+
+    container_job = Path("/opt/spark-apps/jobs/quarantine_records_candidate.py")
+    container_audit_dir = Path("/opt/spark-apps/results/quarantine")
+    if container_job.is_file():
+        command = [
+            "/opt/spark/bin/spark-submit", "--master", "spark://spark-master:7077",
+            str(container_job),
+        ]
+        audit_dir = container_audit_dir
+        cwd = "/opt/datapilot"
+    else:
+        command = [
+            "docker-compose", "exec", "-T", "spark",
+            "/opt/spark/bin/spark-submit",
+            "/opt/spark-apps/jobs/quarantine_records_candidate.py",
+        ]
+        audit_dir = PROJECT_ROOT / "spark" / "results" / "quarantine"
+        cwd = str(PROJECT_ROOT)
+
+    command.extend([
+        "--dataset", dataset, "--execution-id", execution_id,
+        "--expected-count", str(dq_validation["invalid_count"]),
+        "--mode", "APPLY", "--confirm-write",
+    ])
+    completed = subprocess.run(
+        command, cwd=cwd, capture_output=True, text=True, timeout=600, check=False
+    )
+    audit_path = audit_dir / f"{dataset}_{execution_id}_apply.json"
+
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "Spark APPLY did not exit successfully. The write outcome may be unknown; "
+            "inspect Iceberg and Spark logs before retrying. "
+            f"Exit code: {completed.returncode}."
+        )
+    if not audit_path.is_file():
+        raise RuntimeError(
+            "Spark APPLY returned success but its audit report is missing; "
+            "the write outcome cannot be confirmed."
+        )
+    with audit_path.open("r", encoding="utf-8") as file:
+        report = json.load(file)
+    if (
+        report.get("dataset") != dataset
+        or report.get("execution_id") != execution_id
+        or report.get("mode") != "APPLY"
+        or report.get("status") != "COMMITTED_AND_VERIFIED"
+        or report.get("invalid_count") != dq_validation["invalid_count"]
+        or report.get("s3_write_performed") is not True
+        or report.get("source_modified") is not False
+    ):
+        raise RuntimeError(
+            "Spark APPLY audit failed safety validation; inspect the target before retrying."
+        )
+    return report
+
+
 def print_result(result: dict) -> None:
 
     print("\n" + "=" * 40)
@@ -609,11 +698,21 @@ def main():
         ],
     )
 
+    parser.add_argument(
+        "--mode", choices=["DRY_RUN", "APPLY"], default="DRY_RUN",
+        help="DRY_RUN is the default; APPLY requires --confirm-write.",
+    )
+    parser.add_argument(
+        "--confirm-write", action="store_true",
+        help="Explicitly authorize persistent quarantine writes with --mode APPLY.",
+    )
     args = parser.parse_args()
 
     result = execute(
         dataset=args.dataset,
         action=args.action,
+        mode=args.mode,
+        confirm_write=args.confirm_write,
     )
 
     print_result(result)

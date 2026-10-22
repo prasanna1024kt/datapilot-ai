@@ -1,0 +1,312 @@
+"""Isolated Iceberg quarantine recovery test. Never targets production quarantine/Gold tables.
+
+DRY_RUN is the default. APPLY_TEST writes only to a run-specific test table and S3 prefix.
+The test deliberately simulates a failure after the first MERGE, records the ambiguous
+intermediate state, then retries and verifies idempotency. It does not delete resources.
+"""
+import argparse
+import fcntl
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+
+import yaml
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, current_timestamp, lit
+
+BUSINESS_KEYS = ["order_id", "payment_sequential"]
+SOURCE_COLUMNS = [
+    "order_id", "payment_sequential", "payment_type",
+    "payment_installments", "payment_value",
+]
+METADATA_TYPES = {
+    "execution_id": "string",
+    "quarantine_reason": "string",
+    "rule_name": "string",
+    "source_layer": "string",
+    "quarantined_at": "timestamp",
+}
+PRODUCTION_TABLE = "olist_order_payments_quarantine"
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--config-root", default="/opt/datapilot/config")
+    p.add_argument("--run-id", required=True,
+                   help="Unique letters/numbers/underscores; creates a dedicated test table/prefix.")
+    p.add_argument("--mode", choices=("DRY_RUN", "APPLY_TEST"), default="DRY_RUN")
+    p.add_argument("--confirm-test-writes", action="store_true",
+                   help="Required with APPLY_TEST. Never authorizes production-table writes.")
+    p.add_argument("--expected-count", type=int, default=2)
+    p.add_argument("--audit-dir", default="/opt/spark-apps/results/quarantine/recovery_test")
+    return p.parse_args()
+
+
+def write_json_exclusive(path: Path, data: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("x", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+        f.flush()
+
+
+def quote_ident(value):
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+        raise ValueError(f"Invalid SQL identifier: {value!r}")
+    return f"`{value}`"
+
+
+def main():
+    args = parse_args()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_]{2,39}", args.run_id):
+        raise ValueError("--run-id must be 3-40 letters, digits, or underscores and start alphanumeric.")
+    if args.expected_count < 1:
+        raise ValueError("--expected-count must be positive.")
+    if args.mode == "APPLY_TEST" and not args.confirm_test_writes:
+        raise ValueError("APPLY_TEST requires --confirm-test-writes; no writes performed.")
+    if args.mode == "DRY_RUN" and args.confirm_test_writes:
+        raise ValueError("--confirm-test-writes is valid only with --mode APPLY_TEST.")
+
+    config_root = Path(args.config_root)
+    variables = yaml.safe_load((config_root / "variables.yaml").read_text(encoding="utf-8"))
+    dq = yaml.safe_load((config_root / "dq/olist_order_payments.yaml").read_text(encoding="utf-8"))
+    bucket = variables["storage"]["bucket"]
+    layers = variables["storage"]["layers"]
+    region = variables.get("aws", {}).get("region", "us-east-1")
+    source_path = f"s3a://{bucket}/{layers['silver']}/olist_order_payments"
+    # Deliberately distinct from processed/quarantine/olist_order_payments.
+    test_root = f"s3a://{bucket}/processed/quarantine-recovery-test"
+    test_path = f"{test_root}/{args.run_id}/olist_order_payments"
+    test_warehouse = f"{test_root}/warehouse/{args.run_id}"
+    database_name = f"datapilot_recovery_test_{args.run_id}"
+    table_name = f"recovery_test_olist_order_payments_{args.run_id}"
+    table = f"`glue_catalog`.{quote_ident(database_name)}.{quote_ident(table_name)}"
+    audit_dir = Path(args.audit_dir)
+    dry_audit = audit_dir / f"recovery_{args.run_id}_dry_run.json"
+    simulated_audit = audit_dir / f"recovery_{args.run_id}_simulated_failure.json"
+    success_audit = audit_dir / f"recovery_{args.run_id}_retry_success.json"
+    lock_path = audit_dir / f".recovery_{args.run_id}.lock"
+
+    # Hard safety assertions: test paths must remain in the dedicated test root.
+    production_gold_root = f"s3a://{bucket}/{layers['gold'].strip('/')}"
+    production_quarantine_root = f"s3a://{bucket}/{layers['quarantine'].strip('/')}"
+    def overlaps(path_value, root_value):
+        path_value = path_value.rstrip("/")
+        root_value = root_value.rstrip("/")
+        return path_value == root_value or path_value.startswith(root_value + "/")
+    if not test_path.startswith(test_root.rstrip("/") + "/"):
+        raise RuntimeError("Safety check failed: test path is outside the test root.")
+    if (overlaps(test_path, source_path)
+            or overlaps(test_path, production_gold_root)
+            or overlaps(test_path, production_quarantine_root)
+            or overlaps(test_warehouse, production_gold_root)
+            or overlaps(test_warehouse, production_quarantine_root)):
+        raise RuntimeError("Safety check failed: test path or warehouse overlaps production.")
+    if args.mode == "DRY_RUN" and any(p.exists() for p in (dry_audit, simulated_audit, success_audit)):
+        raise RuntimeError("Audit already exists for this run ID; choose a new --run-id.")
+    if args.mode == "APPLY_TEST" and any(p.exists() for p in (simulated_audit, success_audit)):
+        raise RuntimeError("Recovery audit already exists for this run ID; choose a new --run-id.")
+
+    lock_handle = None
+    if args.mode == "APPLY_TEST":
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_handle = lock_path.open("a+", encoding="utf-8")
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            lock_handle.close()
+            raise RuntimeError("Another test run holds this local lock; no test write started.") from exc
+
+    spark = None
+    try:
+        warehouse = f"s3a://{bucket}/{layers['gold']}"
+        spark = (
+            SparkSession.builder
+            .appName(f"DataPilot-Isolated-Quarantine-Recovery-{args.run_id}")
+            .config("spark.sql.catalog.glue_catalog", "org.apache.iceberg.spark.SparkCatalog")
+            .config("spark.sql.catalog.glue_catalog.catalog-impl", "org.apache.iceberg.aws.glue.GlueCatalog")
+            .config("spark.sql.catalog.glue_catalog.warehouse", test_warehouse)
+            .config("spark.sql.catalog.glue_catalog.io-impl", "org.apache.iceberg.aws.s3.S3FileIO")
+            .config("spark.sql.catalog.glue_catalog.client.region", region)
+            .getOrCreate()
+        )
+        spark.sparkContext.setLogLevel("WARN")
+
+        source = spark.read.parquet(source_path)
+        missing_columns = sorted(set(SOURCE_COLUMNS) - set(source.columns))
+        if missing_columns:
+            raise RuntimeError(f"Silver source missing required columns: {missing_columns}")
+
+        # Match the active installment quarantine rule; reject unrelated DQ failures.
+        checks = dq.get("checks", {})
+        ranges = checks.get("range_checks", {})
+        inst_rule = ranges.get("payment_installments", {})
+        value_rule = ranges.get("payment_value", {})
+        null_checks = checks.get("null_checks", {})
+        if ranges.get("enabled") is not True or inst_rule.get("min") != 1 or inst_rule.get("max") != 100:
+            raise RuntimeError("Expected enabled payment_installments range rule 1..100.")
+        if value_rule.get("min") != 0 or value_rule.get("max") != 100000:
+            raise RuntimeError("Expected payment_value range 0..100000.")
+        if null_checks.get("enabled") is not True:
+            raise RuntimeError("Expected null checks enabled.")
+
+        if source.filter(col("order_id").isNull() | col("payment_sequential").isNull()).limit(1).count():
+            raise RuntimeError("Source contains null business keys.")
+        if source.groupBy(*BUSINESS_KEYS).count().filter(col("count") > 1).limit(1).count():
+            raise RuntimeError("Source contains duplicate business keys.")
+
+        invalid = source.filter(
+            col("payment_installments").isNull()
+            | (col("payment_installments") < inst_rule["min"])
+            | (col("payment_installments") > inst_rule["max"])
+        )
+        invalid_count = invalid.count()
+        source_count = source.count()
+        if invalid_count != args.expected_count:
+            raise RuntimeError(f"Expected {args.expected_count} invalid rows; found {invalid_count}.")
+
+        # Fail closed if rows have unrelated DQ failures that this quarantine rule must not hide.
+        other_bad = source.filter(
+            col("payment_type").isNull()
+            | col("payment_value").isNull()
+            | (col("payment_value") < value_rule["min"])
+            | (col("payment_value") > value_rule["max"])
+        ).limit(1).count()
+        if other_bad:
+            raise RuntimeError("Unrelated payment DQ failure found; isolated test refused to proceed.")
+
+        base = {
+            "dataset": "olist_order_payments",
+            "run_id": args.run_id,
+            "mode": args.mode,
+            "source_path": source_path,
+            "source_count": source_count,
+            "invalid_count": invalid_count,
+            "test_table": table,
+            "test_location": test_path,
+            "production_table_touched": False,
+            "production_gold_touched": False,
+            "source_modified": False,
+        }
+        if args.mode == "DRY_RUN":
+            report = {**base, "status": "VALIDATED", "s3_write_performed": False,
+                      "checked_at": datetime.now(timezone.utc).isoformat()}
+            write_json_exclusive(dry_audit, report)
+            print(json.dumps(report, indent=2))
+            return
+
+        # APPLY_TEST must never reuse an existing table or prefix; test is one-shot per run-id.
+        if spark.catalog.tableExists(table):
+            raise RuntimeError(f"Test table already exists: {table}; use a new --run-id.")
+        if spark.sql(f"SHOW TABLES IN `glue_catalog`.{quote_ident(database_name)}").filter(col("tableName") == table_name).limit(1).count():
+            raise RuntimeError("Test table name already registered; use a new --run-id.")
+
+        incoming = (
+            invalid.select(*SOURCE_COLUMNS)
+            .withColumn("execution_id", lit(f"recovery-test-{args.run_id}"))
+            .withColumn("quarantine_reason", lit("Simulated recovery test: installment range 1..100"))
+            .withColumn("rule_name", lit("range_check:payment_installments"))
+            .withColumn("source_layer", lit("silver"))
+            .withColumn("quarantined_at", current_timestamp())
+        )
+        spark.sql(
+            f"CREATE DATABASE IF NOT EXISTS `glue_catalog`.{quote_ident(database_name)} "
+            f"LOCATION '{test_path}/database'"
+        )
+        schema_sql = [f"{quote_ident(f.name)} {f.dataType.simpleString()}" for f in incoming.schema.fields]
+        spark.sql(
+            f"CREATE TABLE {table} ({', '.join(schema_sql)}) USING iceberg "
+            f"LOCATION '{test_path}' TBLPROPERTIES ('format-version'='2')"
+        )
+        details = spark.sql(f"DESCRIBE TABLE EXTENDED {table}").collect()
+        detail_map = {
+            str(r[0]).strip().lower(): str(r[1]).strip()
+            for r in details if r[0] is not None and r[1] is not None
+        }
+        actual_provider = detail_map.get("provider", "").lower()
+        actual_location = detail_map.get("location", "").rstrip("/")
+        if actual_provider != "iceberg":
+            raise RuntimeError(f"Test target provider is not Iceberg: {actual_provider!r}")
+        if actual_location != test_path.rstrip("/"):
+            raise RuntimeError(f"Test target location mismatch: {actual_location!r}")
+
+        incoming.createOrReplaceTempView("recovery_test_incoming")
+        merge_sql = f"""
+            MERGE INTO {table} AS target
+            USING recovery_test_incoming AS source
+            ON target.`order_id` = source.`order_id`
+               AND target.`payment_sequential` = source.`payment_sequential`
+            WHEN NOT MATCHED THEN INSERT *
+        """
+
+        # First commit, then deliberately record the simulated post-commit interruption.
+        spark.sql(merge_sql)
+        simulated = {
+            **base,
+            "status": "COMMIT_SUCCEEDED_VERIFICATION_NOT_RUN_SIMULATED_FAILURE",
+            "failure_point": "immediately_after_first_merge_before_verification_or_success_audit",
+            "s3_write_performed": True,
+            "merge_completed": True,
+            "verification_completed": False,
+            "note": "Intentional simulation; a real process crash may prevent local audit publication.",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+        write_json_exclusive(simulated_audit, simulated)
+
+        # Retry the same keys. MERGE should add no rows; then verify exact business-key count and values.
+        spark.sql(merge_sql)
+        committed = spark.table(table)
+        matching = committed.join(invalid.select(*BUSINESS_KEYS), BUSINESS_KEYS, "inner")
+        matched_count = matching.count()
+        committed_count = committed.count()
+        duplicate_keys = committed.groupBy(*BUSINESS_KEYS).count().filter(col("count") != 1).limit(1).count()
+        if committed_count != invalid_count:
+            raise RuntimeError(f"Retry verification failed: expected exactly {invalid_count} total rows, got {committed_count}.")
+        if matched_count != invalid_count or duplicate_keys:
+            raise RuntimeError(
+                f"Retry verification failed: expected {invalid_count} matching rows, got {matched_count}; duplicate_keys={bool(duplicate_keys)}."
+            )
+
+        # Verify original source values, null-safe.
+        expected = invalid.select(*SOURCE_COLUMNS).alias("e")
+        actual = committed.select(*SOURCE_COLUMNS).alias("a")
+        joined = expected.join(actual, (col("e.order_id") == col("a.order_id")) &
+                               (col("e.payment_sequential") == col("a.payment_sequential")), "left")
+        mismatch = None
+        for name in SOURCE_COLUMNS:
+            cond = ~col(f"e.`{name}`").eqNullSafe(col(f"a.`{name}`"))
+            mismatch = cond if mismatch is None else (mismatch | cond)
+        if joined.filter(mismatch).limit(1).count():
+            raise RuntimeError("Retry verification failed: committed values differ from Silver.")
+
+        success = {
+            **base,
+            "status": "RETRY_COMMITTED_AND_VERIFIED",
+            "s3_write_performed": True,
+            "merge_completed": True,
+            "verification_completed": True,
+            "matching_quarantine_rows": matched_count,
+            "total_test_table_rows": committed_count,
+            "duplicate_business_keys": False,
+            "same_key_retry_added_duplicates": False,
+            "source_modified": False,
+            "production_table_touched": False,
+            "production_gold_touched": False,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+        }
+        write_json_exclusive(success_audit, success)
+        print(json.dumps({"simulated_failure_audit": simulated, "retry_success_audit": success}, indent=2))
+        print("NOTE: Isolated test table and S3 prefix were intentionally retained for inspection.")
+    finally:
+        if spark is not None:
+            spark.stop()
+        if lock_handle is not None:
+            try:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                lock_handle.close()
+
+
+if __name__ == "__main__":
+    main()

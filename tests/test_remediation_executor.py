@@ -5,7 +5,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-
 EXECUTOR_PATH = (
     Path(__file__).resolve().parents[1]
     / "agents"
@@ -365,6 +364,53 @@ class TestRemediationExecutor(unittest.TestCase):
 
         self.assertEqual(record["execution"]["status"], "FAILED")
         self.assertFalse(record["execution"]["s3_write_performed"])
+
+
+    def test_apply_requires_explicit_confirmation_before_validation_or_spark(self):
+        with patch.object(executor, "validate_action") as validation_mock, \
+             patch.object(executor, "run_quarantine_apply") as apply_mock:
+            with self.assertRaisesRegex(RuntimeError, "APPLY requires explicit --confirm-write"):
+                executor.execute(
+                    "olist_order_payments", "QUARANTINE_RECORDS", mode="APPLY"
+                )
+        validation_mock.assert_not_called()
+        apply_mock.assert_not_called()
+
+    def test_dry_run_rejects_write_confirmation(self):
+        with patch.object(executor, "validate_action") as validation_mock:
+            with self.assertRaisesRegex(RuntimeError, "only valid with --mode APPLY"):
+                executor.execute(
+                    "olist_order_payments", "QUARANTINE_RECORDS", confirm_write=True
+                )
+        validation_mock.assert_not_called()
+
+    def test_apply_runner_rejects_unverified_audit(self):
+        import json
+        from unittest.mock import Mock
+
+        audit_dir = self.root / "spark" / "results" / "quarantine"
+        audit_dir.mkdir(parents=True)
+        execution_id = "quarantine-test-apply"
+        audit_path = audit_dir / f"olist_order_payments_{execution_id}_apply.json"
+        audit_path.write_text(json.dumps({
+            "dataset": "olist_order_payments",
+            "execution_id": execution_id,
+            "mode": "APPLY",
+            "status": "COMMITTED_AND_VERIFIED",
+            "invalid_count": 2,
+            "s3_write_performed": True,
+            "source_modified": True,
+        }), encoding="utf-8")
+
+        completed = Mock(returncode=0, stdout="", stderr="")
+        with patch.object(executor, "PROJECT_ROOT", self.root), \
+             patch.object(executor.subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(RuntimeError, "failed safety validation"):
+                executor.run_quarantine_apply(
+                    "olist_order_payments",
+                    {"validated": True, "invalid_count": 2},
+                    execution_id,
+                )
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
