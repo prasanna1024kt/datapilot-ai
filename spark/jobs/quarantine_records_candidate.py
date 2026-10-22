@@ -372,7 +372,19 @@ def main():
             or plan.get("execution_mode") != "DRY_RUN"
         ):
             raise RuntimeError("Remediation plan is missing or does not match the approved dry-run plan; no writes performed.")
+        try:
+            fingerprint = validate_plan_fingerprint(plan)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Invalid remediation plan fingerprint: {exc}. "
+                "No writes performed."
+            ) from exc
 
+        if approval.get("plan_fingerprint") != fingerprint:
+            raise RuntimeError(
+                "Approval fingerprint does not match the current plan. "
+                "No writes performed."
+            )
     config_root = Path(args.config_root)
     variables = load_yaml(config_root / "variables.yaml")
     dq_config = load_yaml(config_root / "dq" / f"{args.dataset}.yaml")
