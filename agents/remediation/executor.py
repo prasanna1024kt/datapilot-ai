@@ -290,13 +290,7 @@ def write_execution_history(result: dict) -> Path:
         except FileNotFoundError:
             pass
 
-def write_validation_failure(
-    dataset: str,
-    action: str,
-    execution_id: str,
-    stage: str,
-    error: Exception,
-) -> Path:
+def write_validation_failure(dataset: str,action: str,execution_id: str, stage: str, error: Exception,) -> Path:
     """Record a validation failure without invoking Spark or modifying data."""
     result = {
         "dataset": dataset,
@@ -327,7 +321,7 @@ def write_validation_failure(
         raise error from audit_error
 
 
-def execute(dataset: str, action: str, mode: str = "DRY_RUN", confirm_write: bool = False) -> dict:
+def execute(dataset: str, action: str,mode: str = "DRY_RUN",confirm_write: bool = False,plan_file: str | None = None,allow_unapproved_dry_run: bool = False,) -> dict:
 
     if dataset != "olist_order_payments":
         raise RuntimeError("Dataset is not enabled for remediation.")
@@ -343,27 +337,70 @@ def execute(dataset: str, action: str, mode: str = "DRY_RUN", confirm_write: boo
         f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-"
         f"{uuid.uuid4().hex[:8]}"
     )
-
-    remediation_path = REMEDIATION_DIR / f"{dataset}.json"
+    
+    remediation_path = (
+        Path(plan_file).resolve()
+        if plan_file
+        else REMEDIATION_DIR / f"{dataset}.json"
+    )
     approval_path = APPROVALS_DIR / f"{dataset}.json"
+
+    if allow_unapproved_dry_run and mode != "DRY_RUN":
+        raise RuntimeError(
+            "Unapproved execution is allowed only in DRY_RUN mode."
+        )
 
     try:
         remediation = load_json(remediation_path)
-        approval = load_json(approval_path)
+
+        if allow_unapproved_dry_run:
+            approval = {
+                "status": "NOT_REQUIRED_FOR_DRY_RUN",
+                "approved_by": None,
+            }
+        else:
+            approval = load_json(approval_path)
+
     except Exception as exc:
         write_validation_failure(
             dataset, action, execution_id, "input_loading", exc
         )
         raise
 
+
+    
     validations = [
         ("action_validation", lambda: validate_action(action)),
-        ("approval_validation", lambda: validate_approval(approval, dataset, action, remediation)),
-        ("plan_validation", lambda: validate_remediation_plan(remediation, dataset, action)),
-        ("quarantine_config_validation", lambda: validate_quarantine_config(dataset)),
-        ("dq_validation", lambda: validate_dq_failure(dataset)),
     ]
 
+    if not allow_unapproved_dry_run:
+        validations.append((
+            "approval_validation",
+            lambda: validate_approval(
+                approval, dataset, action, remediation
+            ),
+        ))
+
+    validations.extend([
+        (
+            "plan_fingerprint_validation",
+            lambda: validate_plan_fingerprint(remediation),
+        ),
+        (
+            "plan_validation",
+            lambda: validate_remediation_plan(
+                remediation, dataset, action
+            ),
+        ),
+        (
+            "quarantine_config_validation",
+            lambda: validate_quarantine_config(dataset),
+        ),
+        (
+            "dq_validation",
+            lambda: validate_dq_failure(dataset),
+        ),
+    ])
     dq_validation = None
     quarantine_config = None
 
@@ -720,13 +757,26 @@ def main():
         "--confirm-write", action="store_true",
         help="Explicitly authorize persistent quarantine writes with --mode APPLY.",
     )
+
+    parser.add_argument(
+        "--plan-file",
+        help="Optional path to the remediation plan JSON.",
+    )
+    parser.add_argument(
+        "--allow-unapproved-dry-run",
+        action="store_true",
+        help="Skip approval validation only for a fingerprint-validated DRY_RUN.",
+    )
+
     args = parser.parse_args()
 
     result = execute(
-        dataset=args.dataset,
-        action=args.action,
-        mode=args.mode,
-        confirm_write=args.confirm_write,
+    dataset=args.dataset,
+    action=args.action,
+    mode=args.mode,
+    confirm_write=args.confirm_write,
+    plan_file=args.plan_file,
+    allow_unapproved_dry_run=args.allow_unapproved_dry_run,
     )
 
     print_result(result)

@@ -2,8 +2,16 @@
 import importlib.util
 import tempfile
 import unittest
+import sys
 from pathlib import Path
 from unittest.mock import patch
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from agents.remediation.plan_fingerprint import attach_plan_fingerprint
 
 EXECUTOR_PATH = (
     Path(__file__).resolve().parents[1]
@@ -62,14 +70,20 @@ class TestRemediationExecutor(unittest.TestCase):
             "s3_write_performed": False,
             "source_modified": False,
         }
-
+    
     def mock_inputs(self):
+        self.plan = attach_plan_fingerprint(self.plan)
+
         def fake_load(path):
             if "approvals" in str(path):
                 return self.approval
             return self.plan
 
-        return patch.object(executor, "load_json", side_effect=fake_load)
+        return patch.object(
+            executor,
+            "load_json",
+            side_effect=fake_load,
+        )
 
     def mock_validations(self):
         return (
