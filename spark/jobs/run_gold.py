@@ -178,40 +178,45 @@ def create_iceberg_table(spark, table_name, result):
 
     print("Iceberg table created successfully")
 
-
 def merge_iceberg_table(spark, table_name, result, key_columns):
 
     print("")
     print("Merging summary into Iceberg table...")
     print(f"Table: {table_name}")
 
-    result.createOrReplaceTempView("gold_summary_source")
+    # Materialize the source to break up the upstream join lineage.
+    result = result.localCheckpoint(eager=True)
+    source_count = result.count()
+    print(f"Materialized source rows: {source_count}")
 
-    merge_condition = " AND ".join(
-        [
-            f"target.{column} = source.{column}"
-            for column in key_columns
-        ]
-    )
+    try:
+        result.createOrReplaceTempView("gold_summary_source")
 
-    spark.sql(
-        f"""
-        MERGE INTO {table_name} AS target
-        USING gold_summary_source AS source
-        ON {merge_condition}
+        merge_condition = " AND ".join(
+            [
+                f"target.{column} = source.{column}"
+                for column in key_columns
+            ]
+        )
 
-        WHEN MATCHED THEN
-          UPDATE SET *
+        spark.sql(
+            f"""
+            MERGE INTO {table_name} AS target
+            USING gold_summary_source AS source
+            ON {merge_condition}
 
-        WHEN NOT MATCHED THEN
-          INSERT *
-        """
-    )
+            WHEN MATCHED THEN
+              UPDATE SET *
 
-    spark.catalog.dropTempView("gold_summary_source")
-
-    print("Iceberg MERGE completed successfully")
-
+            WHEN NOT MATCHED THEN
+              INSERT *
+            """
+        )
+        spark.catalog.dropTempView("gold_summary_source")
+        print("Iceberg MERGE completed successfully")
+    finally:
+        spark.catalog.dropTempView("gold_summary_source")
+        result.unpersist()
 
 def main():
 
@@ -411,7 +416,14 @@ def main():
                 lit("gold")
             )
         )
+        print("=== GOLD SUMMARY SOURCE SCHEMA ===")
+        result.printSchema()
 
+        print("=== GOLD SUMMARY SOURCE COUNT ===")
+        print(f"Source record count: {result.count()}")
+
+        print("=== GOLD SUMMARY SOURCE PLAN ===")
+        result.explain(mode="extended")
         # -------------------------------------------------
         # Iceberg CREATE / MERGE
         # -------------------------------------------------

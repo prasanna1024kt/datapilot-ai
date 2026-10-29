@@ -8,7 +8,8 @@ USER root
 
 RUN pip3 install --no-cache-dir \
     mcp==2.2.0 \
-    uvicorn
+    uvicorn \
+    "psycopg[binary]"
 
 # ---------------------------------------------------------
 # MCP Server environment

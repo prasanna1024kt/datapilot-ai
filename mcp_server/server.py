@@ -4,7 +4,9 @@ from pathlib import Path
 import os
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.server import MCPServer
+import re
 
+from agents.remediation.plan_fingerprint import validate_plan_fingerprint
 
 # ---------------------------------------------------------
 # Configuration
@@ -312,43 +314,62 @@ def get_invalid_records(dataset: str, column: str, minimum: float, maximum: floa
     with output_file.open("r", encoding="utf-8") as file:
         return json.load(file)
 
-
 # ---------------------------------------------------------
 # Tool: Approve Remediation
 # ---------------------------------------------------------
-
-
 @mcp.tool(title="Approve Remediation")
-def approve_remediation(dataset: str, action: str, approved_by: str) -> dict:
-    """
-    Approve a pending remediation plan.
-    Records approval only; does not execute remediation.
-    """
+def approve_remediation(dataset: str, action: str, approved_by: str, plan_fingerprint: str) -> dict:
+    """Approve only the exact remediation plan submitted for review."""
 
     validate_dataset(dataset)
 
     if action != "QUARANTINE_RECORDS":
-        raise ValueError(
-            f"Unsupported remediation action: {action}"
-        )
+        raise ValueError(f"Unsupported remediation action: {action}")
 
     if not approved_by or not approved_by.strip():
         raise ValueError("Approver identity is required.")
 
-    remediation_path = (
-        PROJECT_ROOT
-        / "results"
-        / "remediation"
-        / f"{dataset}.json"
+    if not re.fullmatch(r"[0-9a-f]{64}", plan_fingerprint):
+        raise ValueError("Invalid plan fingerprint format.")
+
+    requests_dir = (
+        PROJECT_ROOT / "results" / "approvals" / "requests"
     )
+    request_path = requests_dir / f"{dataset}_{plan_fingerprint}.json"
 
-    if not remediation_path.exists():
-        raise FileNotFoundError(
-            f"Remediation plan not found: {remediation_path}"
-        )
+    if not request_path.is_file():
+        raise FileNotFoundError("Matching approval request not found.")
 
-    with remediation_path.open("r", encoding="utf-8") as file:
-        plan = json.load(file)
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+
+    if request.get("status") != "PENDING_REVIEW":
+        raise ValueError("Approval request is not pending review.")
+
+    if request.get("dataset") != dataset:
+        raise ValueError("Approval request dataset mismatch.")
+
+    if request.get("action") != action:
+        raise ValueError("Approval request action mismatch.")
+
+    if request.get("plan_fingerprint") != plan_fingerprint:
+        raise ValueError("Approval request fingerprint mismatch.")
+
+    if request.get("execution_scope") != "DRY_RUN_ONLY":
+        raise ValueError("Unexpected execution scope.")
+
+    relative_plan_path = Path(request.get("plan_path", ""))
+    if relative_plan_path.is_absolute():
+        raise ValueError("Absolute plan paths are not allowed.")
+
+    plan_path = (PROJECT_ROOT / relative_plan_path).resolve()
+
+    if not plan_path.is_relative_to(PROJECT_ROOT.resolve()):
+        raise ValueError("Plan path escapes the project directory.")
+
+    if not plan_path.is_file():
+        raise FileNotFoundError("Reviewed remediation plan not found.")
+
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
     if plan.get("dataset") != dataset:
         raise ValueError("Remediation plan dataset mismatch.")
@@ -357,34 +378,42 @@ def approve_remediation(dataset: str, action: str, approved_by: str) -> dict:
         raise ValueError("Remediation plan action mismatch.")
 
     if plan.get("status") != "PENDING_APPROVAL":
-        raise ValueError(
-            f"Plan is not pending approval: {plan.get('status')}"
-        )
+        raise ValueError("Remediation plan is not pending approval.")
 
     if plan.get("requires_approval") is not True:
         raise ValueError("Plan does not require approval.")
 
-    approval_path = (
-        PROJECT_ROOT
-        / "results"
-        / "approvals"
-        / f"{dataset}.json"
-    )
+    if plan.get("execution_mode") != "DRY_RUN":
+        raise ValueError("Plan is not configured for dry-run execution.")
 
+    verified_fingerprint = validate_plan_fingerprint(plan)
+
+    if verified_fingerprint != plan_fingerprint:
+        raise ValueError("Reviewed plan fingerprint has changed.")
+
+    approval_path = (
+        PROJECT_ROOT / "results" / "approvals" / f"{dataset}.json"
+    )
+    # Authorize only the fingerprint-matched dry-run workflow.
+    # The executor rejects APPLY under this approval scope.
     approval = {
         "dataset": dataset,
         "action": action,
         "status": "APPROVED",
         "approved_by": approved_by.strip(),
+        "plan_fingerprint": verified_fingerprint,
+        "execution_scope": "DRY_RUN_ONLY",
         "execution_authorized": True,
     }
 
+    # Approval is recorded, but execution remains unauthorized.
     approval_path.parent.mkdir(parents=True, exist_ok=True)
-
     with approval_path.open("w", encoding="utf-8") as file:
         json.dump(approval, file, indent=2)
+        file.write("\n")
 
     return approval
+
 
 
 

@@ -128,7 +128,9 @@ def validate_dq_failure(dataset: str) -> dict:
         "validated": True,
     }
 
-def validate_approval(approval: dict, dataset: str, action: str, remediation: dict) -> None:
+
+def validate_approval(approval: dict,dataset: str,action: str,remediation: dict,mode: str,) -> None:
+    """Validate approval identity, plan fingerprint, and execution scope."""
 
     if approval.get("dataset") != dataset:
         raise RuntimeError("Approval dataset does not match requested dataset.")
@@ -151,12 +153,20 @@ def validate_approval(approval: dict, dataset: str, action: str, remediation: di
         fingerprint = validate_plan_fingerprint(remediation)
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
-
     if approval.get("plan_fingerprint") != fingerprint:
         raise RuntimeError(
             "Approval fingerprint does not match the current plan."
         )
+    if mode not in {"DRY_RUN", "APPLY"}:
+        raise RuntimeError("Unsupported execution mode for approval.")
 
+    expected_scope = (
+        "DRY_RUN_ONLY" if mode == "DRY_RUN" else "APPLY"
+    )
+    if approval.get("execution_scope") != expected_scope:
+        raise RuntimeError(
+            f"Approval scope must be {expected_scope} for {mode} execution."
+        )
 
 def validate_action(action: str) -> None:
     if action not in ALLOWED_EXECUTION_ACTIONS:
@@ -290,7 +300,7 @@ def write_execution_history(result: dict) -> Path:
         except FileNotFoundError:
             pass
 
-def write_validation_failure(dataset: str,action: str,execution_id: str, stage: str, error: Exception,) -> Path:
+def write_validation_failure(dataset: str,action: str,execution_id: str, stage: str, error: Exception, mode: str = "DRY_RUN",) -> Path:
     """Record a validation failure without invoking Spark or modifying data."""
     result = {
         "dataset": dataset,
@@ -303,7 +313,7 @@ def write_validation_failure(dataset: str,action: str,execution_id: str, stage: 
             "failure_stage": stage,
             "message": f"Validation failed during {stage}.",
             "error": f"{type(error).__name__}: {error}",
-            "mode": "DRY_RUN",
+            "mode": mode,
             "executed": False,
             "source_modification": False,
             "s3_write_performed": False,
@@ -321,7 +331,7 @@ def write_validation_failure(dataset: str,action: str,execution_id: str, stage: 
         raise error from audit_error
 
 
-def execute(dataset: str, action: str,mode: str = "DRY_RUN",confirm_write: bool = False,plan_file: str | None = None,allow_unapproved_dry_run: bool = False,) -> dict:
+def execute(dataset: str, action: str,mode: str = "DRY_RUN",confirm_write: bool = False,plan_file: str | None = None,allow_unapproved_dry_run: bool = False,execution_id: str | None = None,) -> dict:
 
     if dataset != "olist_order_payments":
         raise RuntimeError("Dataset is not enabled for remediation.")
@@ -331,19 +341,37 @@ def execute(dataset: str, action: str,mode: str = "DRY_RUN",confirm_write: bool 
         raise RuntimeError("APPLY requires explicit --confirm-write.")
     if mode == "DRY_RUN" and confirm_write:
         raise RuntimeError("--confirm-write is only valid with --mode APPLY.")
+    if execution_id is None:
+        execution_id = (
+            f"quarantine-{dataset}-"
+            f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-"
+            f"{uuid.uuid4().hex[:8]}"
+        )
+    elif (
+        not isinstance(execution_id, str)
+        or not execution_id
+        or any(
+            char not in
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+            for char in execution_id
+        )
+    ):
+        raise ValueError(
+            "Execution ID must contain only letters, digits, hyphens, and underscores."
+        )
 
-    execution_id = (
-        f"quarantine-{dataset}-"
-        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-"
-        f"{uuid.uuid4().hex[:8]}"
-    )
     
     remediation_path = (
         Path(plan_file).resolve()
         if plan_file
         else REMEDIATION_DIR / f"{dataset}.json"
     )
-    approval_path = APPROVALS_DIR / f"{dataset}.json"
+    approval_filename = (
+        f"{dataset}_apply.json"
+        if mode == "APPLY"
+        else f"{dataset}.json"
+    )
+    approval_path = APPROVALS_DIR / approval_filename
 
     if allow_unapproved_dry_run and mode != "DRY_RUN":
         raise RuntimeError(
@@ -360,38 +388,14 @@ def execute(dataset: str, action: str,mode: str = "DRY_RUN",confirm_write: bool 
             }
         else:
             approval = load_json(approval_path)
-
     except Exception as exc:
-        write_validation_failure(
-            dataset, action, execution_id, "input_loading", exc
-        )
+        write_validation_failure(dataset, action, execution_id, "input_loading", exc, mode=mode)
         raise
-
-
-    
-    validations = [
-        ("action_validation", lambda: validate_action(action)),
-    ]
-
+    validations = [("action_validation", lambda: validate_action(action)),]
     if not allow_unapproved_dry_run:
-        validations.append((
-            "approval_validation",
-            lambda: validate_approval(
-                approval, dataset, action, remediation
-            ),
-        ))
-
-    validations.extend([
-        (
-            "plan_fingerprint_validation",
-            lambda: validate_plan_fingerprint(remediation),
-        ),
-        (
-            "plan_validation",
-            lambda: validate_remediation_plan(
-                remediation, dataset, action
-            ),
-        ),
+        validations.append(("approval_validation",lambda: validate_approval(approval, dataset, action, remediation, mode),))
+    validations.extend([("plan_fingerprint_validation",lambda: validate_plan_fingerprint(remediation),),
+        ("plan_validation",lambda: validate_remediation_plan(remediation, dataset, action),),
         (
             "quarantine_config_validation",
             lambda: validate_quarantine_config(dataset),
@@ -415,7 +419,7 @@ def execute(dataset: str, action: str,mode: str = "DRY_RUN",confirm_write: bool 
 
         except Exception as exc:
             write_validation_failure(
-                dataset, action, execution_id, stage, exc
+                dataset, action, execution_id, stage, exc, mode=mode,
             )
             raise
 
@@ -434,6 +438,9 @@ def execute(dataset: str, action: str,mode: str = "DRY_RUN",confirm_write: bool 
                 dataset=dataset,
                 dq_validation=dq_validation,
                 execution_id=execution_id,
+                approval_path=approval_path,
+                plan_path=remediation_path,
+                quarantine_config=quarantine_config,
             )
     except Exception as exc:
         # A failed APPLY subprocess can fail after Iceberg has committed. Unless
@@ -517,8 +524,9 @@ def execute(dataset: str, action: str,mode: str = "DRY_RUN",confirm_write: bool 
 
     except Exception as exc:
         raise RuntimeError(
-            "Dry-run completed and per-execution history was recorded at "
-            f"{history_path}, but latest-execution summary publication failed: "
+            f"{mode} execution finished and per-execution history "
+            f"was recorded at {history_path}, but latest-execution "
+            f"summary publication failed: "
             f"{type(exc).__name__}: {exc}"
         ) from exc
 
@@ -621,8 +629,73 @@ def run_quarantine_dry_run(dataset: str,dq_validation: dict,execution_id: str,) 
 
     return report
 
+def get_expected_quarantine_destination(dataset: str, quarantine_config: dict) -> tuple[str, str]:
+    """Derive the approved Iceberg table and S3 destination."""
 
-def run_quarantine_apply(dataset: str, dq_validation: dict, execution_id: str) -> dict:
+    import yaml
+
+    variables_path = CONFIG_DIR / "variables.yaml"
+
+    if not variables_path.is_file():
+        raise FileNotFoundError(
+            f"Central variables file not found: {variables_path}"
+        )
+
+    with variables_path.open("r", encoding="utf-8") as file:
+        variables = yaml.safe_load(file)
+
+    if not isinstance(variables, dict):
+        raise RuntimeError("Variables configuration must be a mapping.")
+
+    bucket = variables.get("storage", {}).get("bucket")
+    layers = variables.get("storage", {}).get("layers", {})
+
+    quarantine_layer = layers.get(
+        quarantine_config["target_layer"]
+    )
+
+    if not bucket or not quarantine_layer:
+        raise RuntimeError(
+            "Bucket or quarantine layer is missing from configuration."
+        )
+
+    expected_table = (
+        f"{quarantine_config['catalog']}."
+        f"{quarantine_config['database']}."
+        f"{quarantine_config['table']}"
+    )
+
+    expected_path = (
+        f"s3://{bucket}/"
+        f"{quarantine_layer.strip('/')}/"
+        f"{dataset}"
+    )
+
+    return expected_table, expected_path
+
+
+def normalize_table_identifier(value: object) -> str:
+    """Normalize optionally quoted multipart SQL table identifiers."""
+    if not isinstance(value, str):
+        return ""
+    return ".".join(
+        part.strip().strip("`").strip('"')
+        for part in value.strip().split(".")
+    )
+
+
+def normalize_s3_uri(value: object) -> str:
+    """Normalize S3 and S3A URI schemes for destination comparison."""
+    if not isinstance(value, str):
+        return ""
+    normalized = value.strip()
+    if normalized.startswith("s3a://"):
+        normalized = "s3://" + normalized[len("s3a://"):]
+    return normalized.rstrip("/")
+
+
+def run_quarantine_apply(dataset: str, dq_validation: dict, execution_id: str, approval_path: Path, plan_path: Path, quarantine_config: dict) -> dict:
+
     """Invoke the explicitly confirmed Spark APPLY job and verify its audit."""
     if dataset != "olist_order_payments":
         raise RuntimeError("Dataset is not enabled for remediation.")
@@ -631,9 +704,11 @@ def run_quarantine_apply(dataset: str, dq_validation: dict, execution_id: str) -
 
     container_job = Path("/opt/spark-apps/jobs/quarantine_records_candidate.py")
     container_audit_dir = Path("/opt/spark-apps/results/quarantine")
+
     if container_job.is_file():
         command = [
-            "/opt/spark/bin/spark-submit", "--master", "spark://spark-master:7077",
+            "/opt/spark/bin/spark-submit",
+            "--master", "spark://spark-master:7077",
             str(container_job),
         ]
         audit_dir = container_audit_dir
@@ -648,28 +723,54 @@ def run_quarantine_apply(dataset: str, dq_validation: dict, execution_id: str) -
         cwd = str(PROJECT_ROOT)
 
     command.extend([
-        "--dataset", dataset, "--execution-id", execution_id,
+        "--dataset", dataset,
+        "--execution-id", execution_id,
         "--expected-count", str(dq_validation["invalid_count"]),
-        "--mode", "APPLY", "--confirm-write",
+        "--mode", "APPLY",
+        "--confirm-write",
+        "--approval-file", str(approval_path),
+        "--plan-file", str(plan_path),
     ])
     completed = subprocess.run(
         command, cwd=cwd, capture_output=True, text=True, timeout=600, check=False
     )
     audit_path = audit_dir / f"{dataset}_{execution_id}_apply.json"
-
     if completed.returncode != 0:
+        # Preserve bounded diagnostics in execution history. Do not retry APPLY
+        # automatically: Spark may have committed before the process failed.
+        stdout_tail = (completed.stdout or "")[-6000:]
+        stderr_tail = (completed.stderr or "")[-6000:]
         raise RuntimeError(
-            "Spark APPLY did not exit successfully. The write outcome may be unknown; "
-            "inspect Iceberg and Spark logs before retrying. "
-            f"Exit code: {completed.returncode}."
+            "Spark APPLY did not exit successfully. The write outcome may "
+            "be unknown; inspect Iceberg and Spark logs before retrying. "
+            f"Exit code: {completed.returncode}.\n"
+            f"STDOUT (last 6000 chars):\n{stdout_tail}\n"
+            f"STDERR (last 6000 chars):\n{stderr_tail}"
         )
+
     if not audit_path.is_file():
         raise RuntimeError(
             "Spark APPLY returned success but its audit report is missing; "
             "the write outcome cannot be confirmed."
         )
+
     with audit_path.open("r", encoding="utf-8") as file:
         report = json.load(file)
+    expected_table, expected_path = get_expected_quarantine_destination(
+        dataset,
+        quarantine_config,
+    )
+    if normalize_table_identifier(report.get("target_table")) != normalize_table_identifier(expected_table):
+        raise RuntimeError(
+            "Spark APPLY audit target table mismatch. "
+            "Inspect the target before retrying."
+        )
+
+    if normalize_s3_uri(report.get("quarantine_path")) != normalize_s3_uri(expected_path):
+        raise RuntimeError(
+            "Spark APPLY audit quarantine path mismatch. "
+            "Inspect the target before retrying."
+        )
     if (
         report.get("dataset") != dataset
         or report.get("execution_id") != execution_id
@@ -680,10 +781,10 @@ def run_quarantine_apply(dataset: str, dq_validation: dict, execution_id: str) -
         or report.get("source_modified") is not False
     ):
         raise RuntimeError(
-            "Spark APPLY audit failed safety validation; inspect the target before retrying."
+            "Spark APPLY audit failed safety validation; "
+            "inspect the target before retrying."
         )
     return report
-
 
 def print_result(result: dict) -> None:
 
@@ -763,13 +864,15 @@ def main():
         help="Optional path to the remediation plan JSON.",
     )
     parser.add_argument(
+        "--execution-id",
+        help="Optional execution ID supplied by the orchestrator.",
+    )
+    parser.add_argument(
         "--allow-unapproved-dry-run",
         action="store_true",
         help="Skip approval validation only for a fingerprint-validated DRY_RUN.",
     )
-
     args = parser.parse_args()
-
     result = execute(
     dataset=args.dataset,
     action=args.action,
@@ -777,8 +880,8 @@ def main():
     confirm_write=args.confirm_write,
     plan_file=args.plan_file,
     allow_unapproved_dry_run=args.allow_unapproved_dry_run,
+    execution_id=args.execution_id,
     )
-
     print_result(result)
 
 

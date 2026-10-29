@@ -4,7 +4,8 @@ import tempfile
 import unittest
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch,Mock
+import json
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -398,33 +399,151 @@ class TestRemediationExecutor(unittest.TestCase):
                 )
         validation_mock.assert_not_called()
 
+    
     def test_apply_runner_rejects_unverified_audit(self):
-        import json
-        from unittest.mock import Mock
-
+        
         audit_dir = self.root / "spark" / "results" / "quarantine"
         audit_dir.mkdir(parents=True)
         execution_id = "quarantine-test-apply"
-        audit_path = audit_dir / f"olist_order_payments_{execution_id}_apply.json"
-        audit_path.write_text(json.dumps({
-            "dataset": "olist_order_payments",
-            "execution_id": execution_id,
-            "mode": "APPLY",
-            "status": "COMMITTED_AND_VERIFIED",
-            "invalid_count": 2,
-            "s3_write_performed": True,
-            "source_modified": True,
-        }), encoding="utf-8")
+        audit_path = (
+            audit_dir
+            / f"olist_order_payments_{execution_id}_apply.json"
+        )
+        audit_path.write_text(
+            json.dumps({
+                "dataset": "olist_order_payments",
+                "execution_id": execution_id,
+                "mode": "APPLY",
+                "status": "COMMITTED_AND_VERIFIED",
+                "invalid_count": 2,
+                "s3_write_performed": True,
+                "target_table": (
+                    "glue_catalog.datapilot."
+                    "olist_order_payments_quarantine"
+                ),
+                "quarantine_path": (
+                    "s3://datapilot-ai-data-practice/"
+                    "processed/quarantine/olist_order_payments"
+                ),
+                "source_modified": True,
+            }),
+            encoding="utf-8",
+        )
 
         completed = Mock(returncode=0, stdout="", stderr="")
+        approval_path = (
+            self.root / "results" / "approvals"
+            / "olist_order_payments_apply.json"
+        )
+        plan_path = (
+            self.root / "results" / "remediation"
+            / "olist_order_payments.json"
+        )
+
         with patch.object(executor, "PROJECT_ROOT", self.root), \
-             patch.object(executor.subprocess, "run", return_value=completed):
-            with self.assertRaisesRegex(RuntimeError, "failed safety validation"):
+            patch.object(
+                executor.subprocess,
+                "run",
+                return_value=completed,
+            ) as run_mock:
+            with self.assertRaisesRegex(
+                RuntimeError, "failed safety validation"
+            ):
                 executor.run_quarantine_apply(
                     "olist_order_payments",
                     {"validated": True, "invalid_count": 2},
                     execution_id,
+                    approval_path,
+                    plan_path,
+                    {
+                        "dataset": "olist_order_payments",
+                        "catalog": "glue_catalog",
+                        "database": "datapilot",
+                        "table": "olist_order_payments_quarantine",
+                        "format": "iceberg",
+                        "source_layer": "silver",
+                        "target_layer": "quarantine",
+                        "keys": ["order_id", "payment_sequential"],
+                        "validate_source_duplicates": True,
+                    },
                 )
+        command = run_mock.call_args.args[0]
+
+        self.assertEqual(
+            command[command.index("--approval-file") + 1],
+            str(approval_path),
+        )
+        self.assertEqual(
+            command[command.index("--plan-file") + 1],
+            str(plan_path),
+        )
+
+    def test_apply_approval_requires_apply_scope_and_matching_fingerprint(self):
+        plan = attach_plan_fingerprint({
+            "dataset": "olist_order_payments",
+            "action": "QUARANTINE_RECORDS",
+            "requires_approval": True,
+            "status": "PENDING_APPROVAL",
+            "execution_mode": "DRY_RUN",
+        })
+
+        approval = {
+            "dataset": "olist_order_payments",
+            "action": "QUARANTINE_RECORDS",
+            "status": "APPROVED",
+            "execution_authorized": True,
+            "execution_scope": "APPLY",
+            "plan_fingerprint": plan["plan_fingerprint"],
+        }
+
+        # Correct scope and fingerprint are accepted by the validator.
+        executor.validate_approval(
+            approval,
+            "olist_order_payments",
+            "QUARANTINE_RECORDS",
+            plan,
+            "APPLY",
+        )
+
+        # The existing dry-run approval must not authorize writes.
+        approval["execution_scope"] = "DRY_RUN_ONLY"
+
+        with self.assertRaisesRegex(RuntimeError, "scope must be APPLY"):
+            executor.validate_approval(
+                approval,
+                "olist_order_payments",
+                "QUARANTINE_RECORDS",
+                plan,
+                "APPLY",
+            )
+    def test_apply_rejects_missing_separate_approval_before_spark(self):
+        self.plan = attach_plan_fingerprint(self.plan)
+        def fake_load(path):
+            if str(path).endswith("olist_order_payments_apply.json"):
+                raise FileNotFoundError(
+                    f"File not found: {path}"
+                )
+            return self.plan
+
+        with patch.object(
+            executor, "load_json", side_effect=fake_load
+        ), patch.object(
+            executor, "write_validation_failure"
+        ), patch.object(
+            executor, "run_quarantine_apply"
+        ) as spark_mock:
+            with self.assertRaisesRegex(
+                FileNotFoundError, "olist_order_payments_apply.json"
+            ):
+                executor.execute(
+                    "olist_order_payments",
+                    "QUARANTINE_RECORDS",
+                    mode="APPLY",
+                    confirm_write=True,
+                )
+
+            spark_mock.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

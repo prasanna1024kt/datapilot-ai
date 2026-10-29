@@ -68,11 +68,14 @@ def test_missing_fingerprint_is_rejected():
 
 
 def test_matching_approval_is_accepted(plan, approval):
+    approval["execution_scope"] = "DRY_RUN_ONLY"
+
     validate_approval(
         approval,
         "olist_order_payments",
         "QUARANTINE_RECORDS",
         plan,
+        "DRY_RUN",
     )
 
 
@@ -85,6 +88,7 @@ def test_approval_without_fingerprint_is_rejected(plan, approval):
             "olist_order_payments",
             "QUARANTINE_RECORDS",
             plan,
+            "DRY_RUN_ONLY",
         )
 
 
@@ -98,4 +102,16 @@ def test_stale_approval_is_rejected_after_plan_changes(plan, approval):
             "olist_order_payments",
             "QUARANTINE_RECORDS",
             changed,
+            "DRY_RUN_ONLY",
+        )
+def test_dry_run_only_approval_is_rejected_for_apply(plan, approval):
+    approval["execution_scope"] = "DRY_RUN_ONLY"
+
+    with pytest.raises(RuntimeError, match="Approval scope must be APPLY"):
+        validate_approval(
+            approval,
+            "olist_order_payments",
+            "QUARANTINE_RECORDS",
+            plan,
+            "APPLY",
         )
