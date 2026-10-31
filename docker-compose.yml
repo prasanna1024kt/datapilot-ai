@@ -81,6 +81,8 @@ services:
       AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION}
       AIRFLOW__API_AUTH__JWT_SECRET: "QGZC7j8rUrJj1ndiMYhlznvt8vol2tj1bNiALPcGKy-jtX_ahMk_Uku5ivBjZFFyWrmkucTk0X57RTgYgCci_g"
       AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEYRING}
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE: /opt/airflow/secrets/airflow_simple_auth_passwords.json
+      PYTHONPATH: "/opt/datapilot:/opt/spark-apps"
 
     volumes:
       - ./dags:/opt/airflow/dags
@@ -88,6 +90,8 @@ services:
       - ./plugins:/opt/airflow/plugins
       - ~/.aws:/home/airflow/.aws:ro
       - ./results/remediation/history:/opt/datapilot/results/remediation/history:ro
+      - ./secrets/airflow_simple_auth_passwords.json:/opt/airflow/secrets/airflow_simple_auth_passwords.json
+      - ./agents:/opt/datapilot/agents:ro
 
       # Spark applications
       - ./spark:/opt/spark-apps

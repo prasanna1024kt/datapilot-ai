@@ -1,11 +1,11 @@
 import argparse
 import json
 import os
+import re
 from dotenv import load_dotenv
 from langsmith import traceable, tracing_context
 from openai import OpenAI
 from agents.rca.mcp_client import call_tool
-
 
 # =========================================================
 # Environment
@@ -79,9 +79,32 @@ When Bronze and Silver contain the same invalid values
 and counts, explain that the evidence indicates the
 anomaly existed upstream of the Silver transformation
 and was propagated into Silver.
+
+Remediation Audit Interpretation:
+
+- Use remediation_audit as historical execution evidence.
+- Never assume a historical successful remediation
+  means the current data-quality incident is resolved.
+- Distinguish DRY_RUN from APPLY execution modes.
+- COMMITTED_AND_VERIFIED indicates that the
+  recorded remediation execution was committed and verified.
+- Evaluate Gold refresh status separately from
+  remediation execution status.
+- A successful remediation does not prove that
+  downstream Gold data is correct unless the supplied
+  evidence supports that conclusion.
+- source_modified=false and s3_write_performed=true
+  can coexist when data is written to a separate
+  quarantine location.
+- If no audit records exist, state that remediation
+  history is unavailable.
+- Never recommend repeating a remediation merely
+  because an earlier audit record exists.
+- Do not treat audit history as proof of the root
+  cause of the current incident.
+- Clearly distinguish current DQ evidence,
+  historical remediation evidence, and inference.
 """
-
-
 # =========================================================
 # Structured Output Schema
 # =========================================================
@@ -229,59 +252,114 @@ def validate_mcp_evidence(
     name="DataPilot RCA - MCP Evidence Collection",
     run_type="chain"
 )
-def collect_mcp_evidence(dataset: str,column: str,minimum: float,maximum: float) -> dict:
+def collect_mcp_evidence(dataset: str, column: str, minimum: float, maximum: float) -> dict:
     """
-    Collect DQ, Bronze, Silver and invalid-record
-    evidence through MCP.
-    """
+    Collect DQ, Bronze, Silver, invalid-record and
+    remediation audit evidence through MCP.
 
+    Investigation parameters are derived from the first
+    failed range check. CLI parameters are the fallback.
+    """
     print("\nCollecting evidence through MCP...")
-
     print("  → get_dq_result")
-
     dq_result = call_tool(
         "get_dq_result",
-        {
-            "dataset": dataset
-        }
+        {"dataset": dataset}
     )
+    # -----------------------------------------------------
+    # Derive investigation scope from failed DQ rule
+    # -----------------------------------------------------
+    investigation_column = column
+    investigation_minimum = minimum
+    investigation_maximum = maximum
+    investigation_rule = "CLI_FALLBACK"
 
-    print("  → inspect_bronze")
+    checks = dq_result.get("checks", [])
+
+    for check in checks:
+        check_name = check.get("check", "")
+
+        if (
+            check.get("status") == "FAIL"
+            and check_name.startswith("range_check:")
+        ):
+            failed_column = check_name.split(":", 1)[1]
+            range_text = check.get("range", "")
+
+            match = re.fullmatch(
+                r"\s*(-?\d+(?:\.\d+)?)\s*<=\s*value\s*<=\s*(-?\d+(?:\.\d+)?)\s*",
+                range_text
+            )
+
+            if match:
+                investigation_column = failed_column
+                investigation_minimum = float(match.group(1))
+                investigation_maximum = float(match.group(2))
+                investigation_rule = check_name
+                break
+
+    print("\nInvestigation scope:")
+    print(f"  Column  : {investigation_column}")
+    print(f"  Minimum : {investigation_minimum}")
+    print(f"  Maximum : {investigation_maximum}")
+    print(f"  Rule    : {investigation_rule}")
+    # -----------------------------------------------------
+    # Bronze inspection
+    # -----------------------------------------------------
+    print("\n  → inspect_bronze")
 
     bronze_result = call_tool(
         "inspect_bronze",
         {
             "dataset": dataset,
-            "column": column,
-            "minimum": minimum,
-            "maximum": maximum
+            "column": investigation_column,
+            "minimum": investigation_minimum,
+            "maximum": investigation_maximum
         }
     )
-
+    # -----------------------------------------------------
+    # Silver inspection
+    # -----------------------------------------------------
     print("  → inspect_silver")
 
     silver_result = call_tool(
         "inspect_silver",
         {
             "dataset": dataset,
-            "column": column,
-            "minimum": minimum,
-            "maximum": maximum
+            "column": investigation_column,
+            "minimum": investigation_minimum,
+            "maximum": investigation_maximum
         }
     )
-
+    # -----------------------------------------------------
+    # Invalid records
+    # -----------------------------------------------------
     print("  → get_invalid_records")
 
     invalid_records = call_tool(
         "get_invalid_records",
         {
             "dataset": dataset,
-            "column": column,
-            "minimum": minimum,
-            "maximum": maximum
+            "column": investigation_column,
+            "minimum": investigation_minimum,
+            "maximum": investigation_maximum
         }
     )
+    # -----------------------------------------------------
+    # Historical remediation audit
+    # -----------------------------------------------------
+    print("  → get_remediation_audit")
 
+    remediation_audit = call_tool(
+        "get_remediation_audit",
+        {
+            "dataset": dataset,
+            "limit": 5
+        }
+    )
+    # -----------------------------------------------------
+    # Evidence validation
+    # -----------------------------------------------------
     validate_mcp_evidence(
         dq_result=dq_result,
         bronze_result=bronze_result,
@@ -292,10 +370,17 @@ def collect_mcp_evidence(dataset: str,column: str,minimum: float,maximum: float)
         "dq_result": dq_result,
         "bronze": bronze_result,
         "silver": silver_result,
-        "invalid_records": invalid_records
+        "invalid_records": invalid_records,
+        "remediation_audit": remediation_audit,
+        "investigation_scope": {
+            "column": investigation_column,
+            "minimum": investigation_minimum,
+            "maximum": investigation_maximum,
+            "rule": investigation_rule
+        }
     }
 
-    print("MCP evidence collection completed.")
+    print("\nMCP evidence collection completed.")
 
     return evidence_bundle
 
@@ -590,8 +675,8 @@ def main():
         rca_evidence = {
             "bronze": evidence_bundle["bronze"],
             "silver": evidence_bundle["silver"],
-            "invalid_records": evidence_bundle["invalid_records"]
-
+            "invalid_records": evidence_bundle["invalid_records"],
+            "remediation_audit": evidence_bundle["remediation_audit"]
         }
 
         # -------------------------------------------------

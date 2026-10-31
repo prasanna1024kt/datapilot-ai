@@ -2,22 +2,22 @@ import json
 import subprocess
 from pathlib import Path
 import os
+import re
+from datetime import date, datetime
+from decimal import Decimal
+import psycopg
+from psycopg.rows import dict_row
+from agents.remediation.plan_fingerprint import validate_plan_fingerprint
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.server import MCPServer
-import re
-
-from agents.remediation.plan_fingerprint import validate_plan_fingerprint
 
 # ---------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
 DQ_RESULTS_DIR = PROJECT_ROOT / "results" / "dq"
 RCA_RESULTS_DIR = PROJECT_ROOT / "results" / "rca"
-
-
 # ---------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------
@@ -313,6 +313,99 @@ def get_invalid_records(dataset: str, column: str, minimum: float, maximum: floa
 
     with output_file.open("r", encoding="utf-8") as file:
         return json.load(file)
+
+# ---------------------------------------------------------
+# Tool: Get Remediation Audit (read-only)
+# ---------------------------------------------------------
+
+
+@mcp.tool(title="Get Remediation Audit")
+def get_remediation_audit(dataset: str = "", execution_id: str = "", limit: int = 10) -> dict:
+    """Read recent remediation audit records. This tool never changes data."""
+
+    dataset = dataset.strip()
+    execution_id = execution_id.strip()
+
+    if dataset:
+        validate_dataset(dataset)
+
+    if limit < 1 or limit > 20:
+        raise ValueError("limit must be between 1 and 20.")
+
+    if not dataset and not execution_id:
+        raise ValueError(
+            "Provide dataset or execution_id to scope the audit lookup."
+        )
+
+    sql = """
+        SELECT
+            execution_id,
+            dag_id,
+            dag_run_id,
+            dataset,
+            action,
+            execution_mode,
+            execution_status,
+            approval_status,
+            approved_by,
+            invalid_count,
+            quarantined_count,
+            target_table,
+            quarantine_path,
+            source_modified,
+            s3_write_performed,
+            started_at,
+            completed_at,
+            error_type,
+            error_message,
+            audit_details,
+            created_at,
+            updated_at
+        FROM datapilot_audit.remediation_execution_summary
+        WHERE (%s = '' OR dataset = %s)
+          AND (%s = '' OR execution_id = %s)
+        ORDER BY updated_at DESC
+        LIMIT %s
+    """
+
+    connection_settings = {
+        "host": os.environ["MCP_AUDIT_DB_HOST"],
+        "port": int(os.environ.get("MCP_AUDIT_DB_PORT", "5432")),
+        "dbname": os.environ["MCP_AUDIT_DB_NAME"],
+        "user": os.environ["MCP_AUDIT_DB_USER"],
+        "password": os.environ["MCP_AUDIT_DB_PASSWORD"],
+        "connect_timeout": 5,
+        "options": "-c default_transaction_read_only=on",
+    }
+
+    with psycopg.connect(**connection_settings, row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                sql,
+                (
+                    dataset, dataset,
+                    execution_id, execution_id,
+                    limit,
+                ),
+            )
+            rows = cur.fetchall()
+
+    def json_safe(value):
+        if isinstance(value, (datetime, date)):
+            return value.isoformat()
+        if isinstance(value, Decimal):
+            return float(value)
+        if isinstance(value, dict):
+            return {key: json_safe(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [json_safe(item) for item in value]
+        return value
+
+    return {
+        "read_only": True,
+        "count": len(rows),
+        "records": [json_safe(dict(row)) for row in rows],
+    }
 
 # ---------------------------------------------------------
 # Tool: Approve Remediation

@@ -3,11 +3,12 @@ import re
 import subprocess
 from pathlib import Path
 from airflow.providers.standard.operators.python import PythonOperator
-from airflow.sdk import DAG, TriggerRule
+from airflow.sdk import DAG, TriggerRule, get_current_context
 from datetime import datetime
 from airflow.providers.apache.spark.operators.spark_submit import (
     SparkSubmitOperator,
 )
+from agents.rca.mcp_client import call_tool
 
 
 SPARK_CONNECTION = "spark_default"
@@ -162,7 +163,24 @@ def extract_failed_range_check(dq_result: dict) -> dict:
         "maximum": maximum,
     }
 
+def run_supervisor_assessment() -> None:
+    """Run the final Supervisor assessment for this DAG run."""
 
+    from agents.supervisor.supervisor_agent import run_dag_assessment
+
+    context = get_current_context()
+    dag_run = context["dag_run"]
+
+    print("Starting final DataPilot Supervisor assessment.")
+
+    result = run_dag_assessment(
+        dag_run=dag_run,
+        dq_tables=DQ_TABLES,
+        gold_tables=GOLD_TABLES,
+    )
+
+    print("Supervisor assessment completed.")
+    print(f"Decision: {result['supervisor_decision']['decision']}")
 
 def run_rca(table: str) -> None:
     """
@@ -171,10 +189,12 @@ def run_rca(table: str) -> None:
     The failed DQ rule is discovered dynamically
     from the DQ result through MCP.
     """
-
-    from agents.rca.mcp_client import call_tool
+    context = get_current_context()
+    dag_run = context["dag_run"]
+    run_id = dag_run.run_id
 
     print(f"Starting RCA for dataset: {table}")
+    print(f"Current DAG run ID: {run_id}")
 
     # --------------------------------------------------
     # Get DQ result through MCP
@@ -222,17 +242,11 @@ def run_rca(table: str) -> None:
     # RCA output
     # --------------------------------------------------
 
-    output_dir = Path(RCA_RESULTS_ROOT)
+    output_dir = (Path(RCA_RESULTS_ROOT) / run_id)
 
-    output_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_file = (
-        output_dir
-        / f"{table}.json"
-    )
+    output_file = (output_dir / f"{table}.json")
 
     # --------------------------------------------------
     # Environment
@@ -514,7 +528,17 @@ with DAG(
         verbose=True,
     )
 
+    # ========================================================
+    # Final Supervisor Assessment
+    # ========================================================
 
+    supervisor_assessment = PythonOperator(
+        task_id="supervisor_assessment",
+
+        python_callable=run_supervisor_assessment,
+
+        trigger_rule=TriggerRule.ALL_DONE,
+    )
     # ========================================================
     # Dependencies
     # ========================================================
@@ -527,33 +551,29 @@ with DAG(
     # Silver -> DQ
     for table in SILVER_TABLES:
         silver_tasks[table] >> dq_tasks[table]
-
-
-    # DQ -> Gold
-    #
-    # Each Gold table is gated by its own DQ result.
-    #
-    # Example:
-    #
-    # olist_orders:
-    # Silver -> DQ -> Gold
-    #
-    # olist_order_payments:
-    # Silver -> DQ FAIL -> Gold BLOCKED
-    #
-    # ========================================================
-# DQ -> Gold / RCA
-# ========================================================
-
+    
     for table in DQ_TABLES:
-
-        # DQ PASS -> Gold
         dq_tasks[table] >> gold_tasks[table]
-
-        # DQ FAIL -> RCA
         dq_tasks[table] >> rca_tasks[table]
-
 
     # All Gold tables -> Business Summary
     for table in GOLD_TABLES:
         gold_tasks[table] >> gold_olist_order_summary
+    # ========================================================
+    # All execution paths -> Final Supervisor Assessment
+    # ========================================================
+
+    for table in DQ_TABLES:
+
+        # Wait for every DQ task
+        dq_tasks[table] >> supervisor_assessment
+
+        # Wait for every RCA task (success, failed or skipped)
+        rca_tasks[table] >> supervisor_assessment
+
+    # Wait for every Gold task
+    for table in GOLD_TABLES:
+        gold_tasks[table] >> supervisor_assessment
+
+    # Wait for the Gold business summary
+    gold_olist_order_summary >> supervisor_assessment
