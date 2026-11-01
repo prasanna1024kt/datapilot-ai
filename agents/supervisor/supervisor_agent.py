@@ -45,26 +45,53 @@ def load_dq_result(path: Path) -> dict[str, Any]:
 
     return result
 
+
+def _get_current_run_task_instances(dag_run: Any) -> list[dict[str, Any]]:
+    """Retrieve task instances using the Airflow 3 REST API."""
+
+    airflow_client = AirflowClient()
+
+    return airflow_client.list_task_instances(
+        dag_id=dag_run.dag_id,
+        dag_run_id=dag_run.run_id,
+        limit=100,
+    )
+
+
+def _parse_airflow_timestamp(value: str | None) -> float | None:
+    """Convert an Airflow REST API timestamp into a Unix timestamp."""
+
+    if not value:
+        return None
+
+    try:
+        parsed = datetime.fromisoformat(
+            value.replace("Z", "+00:00")
+        )
+
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+
+        return parsed.timestamp()
+
+    except (TypeError, ValueError):
+        return None
+
+
 def collect_current_run_tasks(dag_run: Any) -> dict[str, Any]:
     """Collect task states from the current Airflow DAG run."""
 
-    task_instances = dag_run.get_task_instances()
+    task_instances = _get_current_run_task_instances(dag_run)
 
     tasks = []
 
     for ti in task_instances:
         tasks.append({
-            "task_id": ti.task_id,
-            "state": ti.state,
-            "try_number": ti.try_number,
-            "start_date": (
-                ti.start_date.isoformat()
-                if ti.start_date else None
-            ),
-            "end_date": (
-                ti.end_date.isoformat()
-                if ti.end_date else None
-            ),
+            "task_id": ti.get("task_id"),
+            "state": ti.get("state"),
+            "try_number": ti.get("try_number"),
+            "start_date": ti.get("start_date"),
+            "end_date": ti.get("end_date"),
         })
 
     state_counts = {}
@@ -82,7 +109,12 @@ def collect_current_run_tasks(dag_run: Any) -> dict[str, Any]:
         "tasks": tasks,
     }
 
-def collect_dag_run_evidence(dag_run: Any, dq_tables: list[str], results_root: Path) -> dict[str, Any]:
+
+def collect_dag_run_evidence(
+    dag_run: Any,
+    dq_tables: list[str],
+    results_root: Path,
+) -> dict[str, Any]:
     """Collect run-aware DQ and RCA evidence."""
 
     run_id = dag_run.run_id
@@ -93,11 +125,10 @@ def collect_dag_run_evidence(dag_run: Any, dq_tables: list[str], results_root: P
     dq_root = results_root / "dq"
     rca_root = results_root / "rca" / run_id
 
-    # Collect current DAG run task instances
-    task_instances = dag_run.get_task_instances()
+    task_instances = _get_current_run_task_instances(dag_run)
 
     task_map = {
-        ti.task_id: ti
+        ti.get("task_id"): ti
         for ti in task_instances
     }
 
@@ -118,29 +149,34 @@ def collect_dag_run_evidence(dag_run: Any, dq_tables: list[str], results_root: P
             }
             continue
 
+        dq_task_state = dq_ti.get("state")
+
         if not dq_path.is_file():
             dq_results[dataset] = {
                 "status": "MISSING",
-                "dq_task_state": dq_ti.state,
+                "dq_task_state": dq_task_state,
                 "error": "DQ result file not found.",
             }
             continue
 
-        if not dq_ti.start_date:
+        task_start = _parse_airflow_timestamp(
+            dq_ti.get("start_date")
+        )
+
+        if task_start is None:
             dq_results[dataset] = {
                 "status": "UNKNOWN_TASK_START_TIME",
-                "dq_task_state": dq_ti.state,
+                "dq_task_state": dq_task_state,
             }
             continue
 
         # Reject reports older than the current task execution
         report_mtime = dq_path.stat().st_mtime
-        task_start = dq_ti.start_date.timestamp()
 
         if report_mtime + 1 < task_start:
             dq_results[dataset] = {
                 "status": "STALE",
-                "dq_task_state": dq_ti.state,
+                "dq_task_state": dq_task_state,
                 "error": "DQ report predates the current task execution.",
             }
             continue
@@ -151,7 +187,7 @@ def collect_dag_run_evidence(dag_run: Any, dq_tables: list[str], results_root: P
 
             dq_results[dataset] = {
                 **dq_assessment,
-                "dq_task_state": dq_ti.state,
+                "dq_task_state": dq_task_state,
                 "report_path": str(dq_path),
                 "evidence_status": "CURRENT_RUN_CANDIDATE",
             }
@@ -159,7 +195,7 @@ def collect_dag_run_evidence(dag_run: Any, dq_tables: list[str], results_root: P
         except Exception as exc:
             dq_results[dataset] = {
                 "status": "READ_FAILED",
-                "dq_task_state": dq_ti.state,
+                "dq_task_state": dq_task_state,
                 "error": str(exc),
             }
 
@@ -178,10 +214,12 @@ def collect_dag_run_evidence(dag_run: Any, dq_tables: list[str], results_root: P
             }
             continue
 
-        if rca_ti.state != "success":
+        rca_task_state = rca_ti.get("state")
+
+        if rca_task_state != "success":
             rca_results[dataset] = {
                 "status": "NOT_SUCCESSFUL",
-                "rca_task_state": rca_ti.state,
+                "rca_task_state": rca_task_state,
             }
             continue
 
@@ -190,14 +228,14 @@ def collect_dag_run_evidence(dag_run: Any, dq_tables: list[str], results_root: P
         if not rca_path.is_file():
             rca_results[dataset] = {
                 "status": "REPORT_MISSING",
-                "rca_task_state": rca_ti.state,
+                "rca_task_state": rca_task_state,
             }
             continue
 
         try:
             rca_results[dataset] = {
                 "status": "SUCCESS",
-                "rca_task_state": rca_ti.state,
+                "rca_task_state": rca_task_state,
                 "report_path": str(rca_path),
                 "result": json.loads(rca_path.read_text()),
             }
@@ -600,6 +638,12 @@ def invoke_rca_agent(
             "investigation_scope": investigation,
             "error": "RCA agent exceeded the 900-second timeout.",
         }
+    except OSError as exc:
+        return {
+            "status": "FAILED",
+            "investigation_scope": investigation,
+            "error": f"Unable to start RCA agent: {exc}",
+        }
 
     if result.returncode != 0:
         return {
@@ -820,6 +864,266 @@ def run_dag_assessment(
     safe_run_id = re.sub(r"[^A-Za-z0-9_.-]", "_", run_id)
 
     output_path = output_dir / f"{safe_run_id}_assessment.json"
+
+    output_path.write_text(
+        json.dumps(assessment, indent=2, default=str) + "\n"
+    )
+
+    print(f"Supervisor assessment saved: {output_path}")
+    print(f"Supervisor decision: {decision}")
+
+    return assessment
+
+
+def _get_remediation_execution_metadata(
+    dag_run: Any,
+    requested_mode: str,
+    execution_state: str,
+) -> dict[str, Any]:
+    """Resolve the remediation execution ID without affecting run assessment."""
+
+    run_conf = dag_run.conf or {}
+
+    if requested_mode == "GOLD_REFRESH_ONLY":
+        execution_id = run_conf.get("execution_id")
+        return {
+            "execution_id": execution_id,
+            "execution_id_source": "DAG_RUN_CONFIGURATION",
+            "execution_id_status": (
+                "AVAILABLE" if execution_id else "NOT_PROVIDED"
+            ),
+        }
+
+    if requested_mode not in {"DRY_RUN", "APPLY"}:
+        return {
+            "execution_id": None,
+            "execution_id_source": "NOT_APPLICABLE",
+            "execution_id_status": "UNSUPPORTED_MODE",
+        }
+
+    if execution_state != "success":
+        return {
+            "execution_id": None,
+            "execution_id_source": "EXECUTOR_XCOM",
+            "execution_id_status": "EXECUTOR_NOT_SUCCESSFUL",
+        }
+
+    try:
+        airflow_client = AirflowClient()
+        xcom_response = airflow_client.get_task_xcom(
+            dag_id=dag_run.dag_id,
+            dag_run_id=dag_run.run_id,
+            task_id="execute_remediation_and_write_summary",
+            key="return_value",
+        )
+        xcom_value = xcom_response.get("value") if isinstance(xcom_response, dict) else None
+        execution_id = (
+            xcom_value.get("execution_id")
+            if isinstance(xcom_value, dict)
+            else None
+        )
+
+        if isinstance(execution_id, str) and execution_id.strip():
+            return {
+                "execution_id": execution_id,
+                "execution_id_source": "EXECUTOR_XCOM",
+                "execution_id_status": "AVAILABLE",
+            }
+
+        return {
+            "execution_id": None,
+            "execution_id_source": "EXECUTOR_XCOM",
+            "execution_id_status": "MISSING_FROM_XCOM",
+        }
+
+    except Exception as exc:
+        # Traceability is best-effort; it must not fail the Supervisor assessment.
+        return {
+            "execution_id": None,
+            "execution_id_source": "EXECUTOR_XCOM",
+            "execution_id_status": "XCOM_RETRIEVAL_FAILED",
+            "execution_id_error": str(exc),
+        }
+
+
+def run_remediation_dag_assessment(dag_run: Any) -> dict[str, Any]:
+    """Assess a remediation DAG run without executing remediation."""
+
+    run_id = dag_run.run_id
+    run_conf = dag_run.conf or {}
+    requested_mode = str(run_conf.get("mode", "DRY_RUN")).upper()
+
+    print("Starting DataPilot Remediation Supervisor assessment.")
+    print(f"DAG ID: {dag_run.dag_id}")
+    print(f"DAG Run ID: {run_id}")
+    print(f"Requested mode: {requested_mode}")
+
+    task_assessment = collect_current_run_tasks(dag_run)
+
+    task_map = {
+        task["task_id"]: task
+        for task in task_assessment["tasks"]
+    }
+
+    monitored_task_ids = [
+        "execute_remediation_and_write_summary",
+        "validate_existing_apply_for_gold",
+        "continue_to_gold_only_after_apply",
+        "refresh_gold_olist_order_payments",
+        "refresh_gold_olist_order_summary",
+        "update_postgres_summary_after_gold_refresh",
+        "update_postgres_summary_after_gold_failure",
+    ]
+
+    remediation_tasks = {
+        task_id: (
+            task_map[task_id]["state"]
+            if task_id in task_map
+            else "TASK_INSTANCE_MISSING"
+        )
+        for task_id in monitored_task_ids
+    }
+
+    failed_tasks = [
+        task for task in task_assessment["tasks"]
+        if task["state"] == "failed"
+    ]
+
+    upstream_failed_tasks = [
+        task for task in task_assessment["tasks"]
+        if task["state"] == "upstream_failed"
+    ]
+
+    execution_state = remediation_tasks[
+        "execute_remediation_and_write_summary"
+    ]
+    validation_state = remediation_tasks[
+        "validate_existing_apply_for_gold"
+    ]
+    payments_state = remediation_tasks[
+        "refresh_gold_olist_order_payments"
+    ]
+    gold_summary_state = remediation_tasks[
+        "refresh_gold_olist_order_summary"
+    ]
+
+    postgres_success_state = remediation_tasks[
+        "update_postgres_summary_after_gold_refresh"
+    ]
+    postgres_failure_state = remediation_tasks[
+        "update_postgres_summary_after_gold_failure"
+    ]
+
+    if requested_mode == "DRY_RUN":
+        if execution_state == "success":
+            decision = "DRY_RUN_COMPLETED_NO_GOLD_REFRESH"
+        elif execution_state in {"failed", "upstream_failed"}:
+            decision = "REMEDIATION_DRY_RUN_FAILED"
+        else:
+            decision = "REVIEW_REMEDIATION_EXECUTION"
+
+    elif requested_mode == "APPLY":
+        if execution_state != "success":
+            decision = "APPLY_EXECUTION_FAILED_OR_INCOMPLETE"
+        elif payments_state == "success" and gold_summary_state == "success":
+            decision = (
+                "APPLY_AND_GOLD_REFRESH_SUCCESS"
+                if postgres_success_state == "success"
+                else "GOLD_SUCCESS_SUMMARY_UPDATE_INCOMPLETE"
+            )
+        elif (
+            payments_state in {"failed", "upstream_failed"}
+            or gold_summary_state in {"failed", "upstream_failed"}
+        ):
+            decision = "APPLY_COMMITTED_GOLD_REFRESH_FAILED"
+        else:
+            decision = "APPLY_COMPLETED_GOLD_OUTCOME_UNKNOWN"
+
+    elif requested_mode == "GOLD_REFRESH_ONLY":
+        if validation_state != "success":
+            decision = "EXISTING_APPLY_VALIDATION_FAILED_OR_INCOMPLETE"
+        elif payments_state == "success" and gold_summary_state == "success":
+            decision = (
+                "GOLD_REFRESH_ONLY_SUCCESS"
+                if postgres_success_state == "success"
+                else "GOLD_SUCCESS_SUMMARY_UPDATE_INCOMPLETE"
+            )
+        elif (
+            payments_state in {"failed", "upstream_failed"}
+            or gold_summary_state in {"failed", "upstream_failed"}
+        ):
+            decision = "GOLD_REFRESH_ONLY_FAILED"
+        else:
+            decision = "GOLD_REFRESH_OUTCOME_UNKNOWN"
+
+    else:
+        decision = "UNSUPPORTED_REMEDIATION_MODE"
+
+    execution_metadata = _get_remediation_execution_metadata(
+        dag_run=dag_run,
+        requested_mode=requested_mode,
+        execution_state=execution_state,
+    )
+
+    assessment = {
+        "agent": "DataPilot Supervisor",
+        "assessment_type": "REMEDIATION_DAG_RUN_ASSESSMENT",
+        "assessment_timestamp": datetime.now(timezone.utc).isoformat(),
+        "pipeline": {
+            "dag_id": dag_run.dag_id,
+            "dag_run_id": run_id,
+            "dag_run_state": dag_run.state,
+            "task_count": task_assessment["task_count"],
+            "task_state_counts": task_assessment["state_counts"],
+            "failed_task_count": len(failed_tasks),
+            "upstream_failed_task_count": len(upstream_failed_tasks),
+        },
+        "remediation_assessment": {
+            "requested_mode": requested_mode,
+            **execution_metadata,
+            "task_results": remediation_tasks,
+        },
+        "supervisor_decision": {
+            "decision": decision,
+            "recommended_next_actions": (
+                ["REVIEW_REMEDIATION_EXECUTION_EVIDENCE"]
+                if decision in {
+                    "REMEDIATION_DRY_RUN_FAILED",
+                    "APPLY_EXECUTION_FAILED_OR_INCOMPLETE",
+                    "EXISTING_APPLY_VALIDATION_FAILED_OR_INCOMPLETE",
+                    "UNSUPPORTED_REMEDIATION_MODE",
+                    "APPLY_COMPLETED_GOLD_OUTCOME_UNKNOWN",
+                    "GOLD_REFRESH_OUTCOME_UNKNOWN",
+                }
+                else ["REVIEW_GOLD_REFRESH_FAILURE"]
+                if decision in {
+                    "APPLY_COMMITTED_GOLD_REFRESH_FAILED",
+                    "GOLD_REFRESH_ONLY_FAILED",
+                }
+                else ["REVIEW_POSTGRES_SUMMARY_UPDATE"]
+                if decision == "GOLD_SUCCESS_SUMMARY_UPDATE_INCOMPLETE"
+                else ["REVIEW_AVAILABLE_EVIDENCE"]
+                if decision == "REVIEW_REMEDIATION_EXECUTION"
+                else ["CONTINUE_NORMAL_MONITORING"]
+            ),
+        },
+        "execution_safety": {
+            "remediation_executed_by_supervisor": False,
+            "dag_triggered_by_supervisor": False,
+            "approval_granted_by_supervisor": False,
+            "source_data_modified_by_supervisor": False,
+        },
+    }
+
+    output_dir = (
+        PROJECT_ROOT / "results" / "supervisor" / "remediation"
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_run_id = re.sub(r"[^A-Za-z0-9_.-]", "_", run_id)
+    output_path = output_dir / f"{safe_run_id}_assessment.json"
+
+    assessment["output_path"] = str(output_path)
 
     output_path.write_text(
         json.dumps(assessment, indent=2, default=str) + "\n"

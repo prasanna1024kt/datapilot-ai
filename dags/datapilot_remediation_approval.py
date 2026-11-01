@@ -192,7 +192,7 @@ def approval_matches_candidate(**context):
     return True
 
 
-def run_remediation_dry_run(**context):
+def run_remediation_execution(**context):
     # Revalidate immediately before invoking the executor.
     if not approval_matches_candidate(**context):
         raise RuntimeError("Approval validation failed before execution.")
@@ -397,7 +397,7 @@ with DAG(
 
     execute_dry_run = PythonOperator(
         task_id="execute_remediation_dry_run",
-        python_callable=run_remediation_dry_run,
+        python_callable=run_remediation_execution,
     )
 
     verify_result = PythonOperator(

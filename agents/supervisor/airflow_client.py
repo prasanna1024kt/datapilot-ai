@@ -295,3 +295,19 @@ class AirflowClient:
         )
 
         return result.get("task_instances", [])
+
+    def get_task_xcom(self, dag_id: str, dag_run_id: str, task_id: str, key: str = "return_value", map_index: int = -1) -> dict:
+        """Retrieve an XCom value from a specific task instance."""
+        endpoint = (
+            f"/api/v2/dags/{dag_id}/dagRuns/{dag_run_id}"
+            f"/taskInstances/{task_id}/xcomEntries/{key}"
+        )
+
+        return self._request(
+            "GET",
+            endpoint,
+            params={
+                "map_index": map_index,
+                "deserialize": True,
+            },
+        )

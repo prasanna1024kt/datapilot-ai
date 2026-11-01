@@ -112,7 +112,6 @@ services:
     build:
       context: .
       dockerfile: docker/airflow/Dockerfile
-
     container_name: datapilot-airflow-scheduler
 
     depends_on:
@@ -140,6 +139,9 @@ services:
       AWS_CONFIG_FILE: /opt/spark/.aws/config
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      SUPERVISOR_AIRFLOW_BASE_URL: "http://airflow:8080"
+      SUPERVISOR_AIRFLOW_USERNAME: "admin"
+      SUPERVISOR_AIRFLOW_PASSWORD_FILE: "/opt/airflow/secrets/airflow_simple_auth_passwords.json"
 
     volumes:
       - ./dags:/opt/airflow/dags
@@ -151,6 +153,7 @@ services:
       - ./config:/opt/datapilot/config:ro
       - ./results:/opt/datapilot/results
       - ./agents:/opt/datapilot/agents:ro
+      - ./secrets/airflow_simple_auth_passwords.json:/opt/airflow/secrets/airflow_simple_auth_passwords.json:ro
 
     command: scheduler
 

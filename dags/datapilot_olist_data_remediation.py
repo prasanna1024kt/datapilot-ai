@@ -82,7 +82,7 @@ def route_remediation_mode(**context):
     ).upper()
 
     if mode in {"DRY_RUN", "APPLY"}:
-        return "execute_dry_run_and_write_summary"
+        return "execute_remediation_and_write_summary"
 
     if mode == "GOLD_REFRESH_ONLY":
         return "validate_existing_apply_for_gold"
@@ -91,7 +91,7 @@ def route_remediation_mode(**context):
         "mode must be DRY_RUN, APPLY, or GOLD_REFRESH_ONLY."
     )
 
-def run_remediation_dry_run(**context):
+def run_remediation_execution(**context):
     # Ensure the project modules are importable by the Airflow task.
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -482,7 +482,7 @@ def should_refresh_gold_after_apply(**context):
         return True
 
     result = ti.xcom_pull(
-        task_ids="execute_dry_run_and_write_summary"
+        task_ids="execute_remediation_and_write_summary"
     )
     if not isinstance(result, dict):
         raise RuntimeError("Remediation task did not return execution metadata.")
@@ -521,7 +521,7 @@ def update_postgres_summary_after_gold_refresh(gold_outcome, **context):
         result = ti.xcom_pull(task_ids="validate_existing_apply_for_gold")
         expected_mode = "GOLD_REFRESH_ONLY"
     elif requested_mode == "APPLY":
-        result = ti.xcom_pull(task_ids="execute_dry_run_and_write_summary")
+        result = ti.xcom_pull(task_ids="execute_remediation_and_write_summary")
         expected_mode = "APPLY"
     else:
         raise RuntimeError(f"Unsupported remediation mode: {requested_mode!r}")
@@ -589,9 +589,22 @@ def update_postgres_summary_after_gold_refresh(gold_outcome, **context):
             "Gold refresh failed; inspect audit_details.gold_refresh."
         )
 
+def run_remediation_supervisor_assessment(**context):
+    """Run the shared Supervisor's remediation-specific assessment."""
+
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+    from agents.supervisor.supervisor_agent import (
+        run_remediation_dag_assessment,
+    )
+
+    return run_remediation_dag_assessment(
+        context["dag_run"]
+    )
+
 
 with DAG(
-    dag_id="datapilot_remediation_dry_run",
+    dag_id="datapilot_olist_data_remediation",
     description=(
         "Run Olist payment remediation in DRY_RUN by default; "
         "APPLY requires explicit trigger configuration and approval"
@@ -611,8 +624,8 @@ with DAG(
     )
 
     execute_and_summarize = PythonOperator(
-        task_id="execute_dry_run_and_write_summary",
-        python_callable=run_remediation_dry_run,
+        task_id="execute_remediation_and_write_summary",
+        python_callable=run_remediation_execution,
     )
     
     validate_existing_apply = PythonOperator(
@@ -623,6 +636,7 @@ with DAG(
         task_id="continue_to_gold_only_after_apply",
         python_callable=should_refresh_gold_after_apply,
         trigger_rule=TriggerRule.NONE_FAILED_MIN_ONE_SUCCESS,
+        ignore_downstream_trigger_rules=False,
     )
     refresh_gold_olist_order_payments = SparkSubmitOperator(
         task_id="refresh_gold_olist_order_payments",
@@ -652,7 +666,11 @@ with DAG(
         env_vars=SPARK_ENV,
         verbose=True,
     )
-
+    supervisor_remediation_assessment = PythonOperator(
+        task_id="supervisor_remediation_assessment",
+        python_callable=run_remediation_supervisor_assessment,
+        trigger_rule=TriggerRule.ALL_DONE,
+    )
     # Exactly one updater should run: success after both Gold tasks succeed,
     # failure when either Gold task fails. Neither updater queries Airflow's ORM.
     update_gold_refresh_summary = PythonOperator(
@@ -680,3 +698,5 @@ with DAG(
     refresh_gold_olist_order_summary >> update_gold_refresh_summary
     refresh_gold_olist_order_payments >> update_gold_refresh_failure_summary
     refresh_gold_olist_order_summary >> update_gold_refresh_failure_summary
+    update_gold_refresh_summary >> supervisor_remediation_assessment
+    update_gold_refresh_failure_summary >> supervisor_remediation_assessment
