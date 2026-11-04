@@ -1,10 +1,13 @@
 import argparse
 import json
+import math
 import os
 import re
 from dotenv import load_dotenv
 from langsmith import traceable, tracing_context
 from openai import OpenAI
+from jsonschema import validate as validate_json_schema
+from jsonschema.exceptions import ValidationError
 from agents.rca.mcp_client import call_tool
 
 # =========================================================
@@ -49,14 +52,71 @@ Your responsibilities are:
 
 Classification rules:
 
-- If the anomaly exists in Bronze and Silver,
-  classify as UPSTREAM_DATA_QUALITY.
+Follow this decision matrix strictly:
 
-- If the anomaly does not exist in Bronze but appears
-  in Silver, classify as TRANSFORMATION_DATA_QUALITY.
+1. DQ status is FAIL, Bronze status is FAIL,
+   and Silver status is FAIL:
+   - Classification: UPSTREAM_DATA_QUALITY.
+   - The anomaly exists in Bronze and is propagated to Silver.
 
-- If the available evidence is insufficient,
-  classify as RCA_INCONCLUSIVE.
+2. DQ status is FAIL, Bronze status is PASS,
+   and Silver status is FAIL:
+   - Classification: TRANSFORMATION_DATA_QUALITY.
+   - The anomaly is observed in Silver but not Bronze.
+
+3. DQ status is FAIL, Bronze status is PASS,
+   and Silver status is PASS:
+   - Classification: RCA_INCONCLUSIVE.
+   - DQ reports a failure, but the layer evidence does not
+     reproduce the anomaly.
+   - Do not classify this as UPSTREAM_DATA_QUALITY.
+   - Do not invent an explanation for the discrepancy.
+
+4. Critical Bronze or Silver evidence is UNAVAILABLE:
+   - Classification: RCA_INCONCLUSIVE.
+   - Use LOW confidence.
+   - Recommend MANUAL_REVIEW.
+
+5. Any other combination that does not establish
+   a supported classification:
+   - Classification: RCA_INCONCLUSIVE.
+   - Do not infer a root cause.
+
+Unavailable Evidence Rules:
+
+- UNAVAILABLE means the layer inspection could not provide evidence.
+- Never interpret UNAVAILABLE as PASS or zero invalid records.
+- Never infer that a layer contains no anomalies when its evidence is unavailable.
+- If critical layer evidence is unavailable, classify as RCA_INCONCLUSIVE.
+- Use LOW confidence when evidence is insufficient.
+- Recommend MANUAL_REVIEW for inconclusive investigations.
+- Clearly state which layer's evidence is unavailable.
+- Do not invent a reason beyond the supplied MCP response.
+
+Remediation Approval Rules:
+
+- Every remediation action MUST have
+  requires_approval=true.
+- This applies to QUARANTINE_RECORDS,
+  TRANSFORMATION_FIX, MANUAL_REVIEW,
+  UPDATE_DQ_RULE, and NO_ACTION.
+- Never return requires_approval=false.
+- Approval must be explicitly set to true
+  in the structured response.
+
+Classification and remediation mapping:
+
+- UPSTREAM_DATA_QUALITY:
+  QUARANTINE_RECORDS only.
+
+- TRANSFORMATION_DATA_QUALITY:
+  TRANSFORMATION_FIX only.
+
+- RCA_INCONCLUSIVE:
+  MANUAL_REVIEW or NO_ACTION only.
+
+Never recommend an action that conflicts
+with the selected classification.
 
 Confidence:
 
@@ -104,6 +164,12 @@ Remediation Audit Interpretation:
   cause of the current incident.
 - Clearly distinguish current DQ evidence,
   historical remediation evidence, and inference.
+- Historical remediation execution must never change
+  the classification of the current incident.
+
+- If current Bronze and Silver evidence both show
+  anomalies, classify using the current evidence even
+  when historical remediation was committed and verified.
 """
 # =========================================================
 # Structured Output Schema
@@ -199,6 +265,199 @@ RCA_SCHEMA = {
 }
 
 
+def determine_expected_classification(dq_result, rca_evidence):
+    """
+    Determine RCA classification from validated DQ,
+    Bronze and Silver evidence.
+
+    Never infer a root cause from unavailable or
+    contradictory evidence.
+    """
+
+    if not isinstance(dq_result, dict):
+        raise ValueError("DQ result must be a dictionary.")
+
+    if not isinstance(rca_evidence, dict):
+        raise ValueError("RCA evidence must be a dictionary.")
+
+    dq_status = dq_result.get("status")
+    bronze = rca_evidence.get("bronze")
+    silver = rca_evidence.get("silver")
+
+    if not isinstance(bronze, dict) or not isinstance(silver, dict):
+        raise ValueError("Bronze and Silver evidence are required.")
+
+    bronze_status = bronze.get("status")
+    silver_status = silver.get("status")
+
+    if dq_status != "FAIL":
+        return "RCA_INCONCLUSIVE"
+
+    if "UNAVAILABLE" in {bronze_status, silver_status}:
+        return "RCA_INCONCLUSIVE"
+
+    if bronze_status == "FAIL" and silver_status == "FAIL":
+        return "UPSTREAM_DATA_QUALITY"
+
+    if bronze_status == "PASS" and silver_status == "FAIL":
+        return "TRANSFORMATION_DATA_QUALITY"
+
+    return "RCA_INCONCLUSIVE"
+
+# =========================================================
+# RCA Output Guardrails
+# =========================================================
+def validate_rca_result(result, dq_result, rca_evidence=None):
+    """
+    Validate the LLM-generated RCA result before it is accepted.
+    Reject malformed, inconsistent, or unsafe recommendations.
+    """
+
+    if not isinstance(result, dict):
+        raise ValueError("RCA output must be a JSON object.")
+
+    if not isinstance(dq_result, dict):
+        raise ValueError("Input DQ result must be a JSON object.")
+
+    try:
+        validate_json_schema(
+            instance=result,
+            schema=RCA_SCHEMA
+        )
+    except ValidationError as exc:
+        raise ValueError(
+            f"RCA output failed schema validation: {exc.message}"
+        ) from exc
+
+    # -----------------------------------------------------
+    # Dataset and DQ consistency
+    # -----------------------------------------------------
+
+    if result["dataset"] != dq_result.get("dataset"):
+        raise ValueError(
+            "RCA output dataset does not match the input DQ dataset."
+        )
+
+    if result["dq_status"] != dq_result.get("status"):
+        raise ValueError(
+            "RCA output DQ status does not match the input DQ status."
+        )
+
+    # -----------------------------------------------------
+    # Deterministic classification validation
+    # -----------------------------------------------------
+
+    silver_evidence = None
+
+    if rca_evidence is not None:
+        expected_classification = determine_expected_classification(
+            dq_result=dq_result,
+            rca_evidence=rca_evidence
+        )
+
+        if result["classification"] != expected_classification:
+            raise ValueError(
+                "RCA classification does not match validated "
+                f"Bronze/Silver evidence. Expected: "
+                f"{expected_classification}; "
+                f"Received: {result['classification']}."
+            )
+
+        silver_evidence = rca_evidence.get("silver")
+
+    # -----------------------------------------------------
+    # Unavailable evidence guardrails
+    # -----------------------------------------------------
+
+    if (
+        isinstance(silver_evidence, dict)
+        and silver_evidence.get("status") == "UNAVAILABLE"
+    ):
+        if result["classification"] != "RCA_INCONCLUSIVE":
+            raise ValueError(
+                "Unavailable Silver evidence requires RCA_INCONCLUSIVE."
+            )
+
+        if result["confidence"] != "LOW":
+            raise ValueError(
+                "Unavailable Silver evidence requires LOW confidence."
+            )
+
+        if result["remediation"]["action"] != "MANUAL_REVIEW":
+            raise ValueError(
+                "Unavailable Silver evidence requires MANUAL_REVIEW."
+            )
+
+        if result["remediation"]["requires_approval"] is not True:
+            raise ValueError(
+                "Unavailable Silver evidence requires human approval."
+            )
+
+    # -----------------------------------------------------
+    # Confidence validation
+    # -----------------------------------------------------
+
+    if (
+        result["classification"] == "RCA_INCONCLUSIVE"
+        and result["confidence"] == "HIGH"
+    ):
+        raise ValueError(
+            "RCA_INCONCLUSIVE cannot have HIGH confidence."
+        )
+
+    # -----------------------------------------------------
+    # Remediation validation
+    # -----------------------------------------------------
+        # -----------------------------------------------------
+    # Remediation validation
+    # -----------------------------------------------------
+
+    remediation = result["remediation"]
+    action = remediation["action"]
+    reason = remediation["reason"].strip()
+    requires_approval = remediation["requires_approval"]
+
+    # Deterministic classification-to-action validation
+    expected_actions = {
+        "UPSTREAM_DATA_QUALITY": {"QUARANTINE_RECORDS"},
+        "TRANSFORMATION_DATA_QUALITY": {"TRANSFORMATION_FIX"},
+        "RCA_INCONCLUSIVE": {"MANUAL_REVIEW", "NO_ACTION"},
+    }
+
+    allowed_actions = expected_actions[result["classification"]]
+
+    if action not in allowed_actions:
+        raise ValueError(
+            "Remediation action does not match RCA classification. "
+            f"Classification: {result['classification']}; "
+            f"Allowed actions: {sorted(allowed_actions)}; "
+            f"Received: {action}."
+        )
+
+    # Inconclusive RCA cannot recommend automated remediation
+    if (
+        result["classification"] == "RCA_INCONCLUSIVE"
+        and action in {
+            "QUARANTINE_RECORDS",
+            "TRANSFORMATION_FIX",
+            "UPDATE_DQ_RULE"
+        }
+    ):
+        raise ValueError(
+            "RCA_INCONCLUSIVE cannot recommend automated remediation."
+        )
+
+    if action == "NO_ACTION" and not reason:
+        raise ValueError(
+            "NO_ACTION requires a meaningful justification."
+        )
+
+    if action != "NO_ACTION" and requires_approval is not True:
+        raise ValueError(
+            "All remediation actions must require approval."
+        )
+
+    return result
 # =========================================================
 # MCP Evidence Validation
 # =========================================================
@@ -206,51 +465,436 @@ RCA_SCHEMA = {
 def validate_mcp_evidence(
     dq_result,
     bronze_result,
-    silver_result
+    silver_result,
+    expected_column=None,
+    expected_minimum=None,
+    expected_maximum=None
 ):
     """
-    Validate the evidence returned by MCP tools
+    Validate DQ, Bronze and Silver MCP evidence
     before sending it to the LLM.
     """
 
     if not isinstance(dq_result, dict):
-        raise ValueError(
-            "DQ result returned by MCP is not a JSON object."
-        )
+        raise ValueError("DQ result returned by MCP is not a JSON object.")
 
     if not isinstance(bronze_result, dict):
-        raise ValueError(
-            "Bronze result returned by MCP is not a JSON object."
-        )
+        raise ValueError("Bronze result returned by MCP is not a JSON object.")
 
     if not isinstance(silver_result, dict):
-        raise ValueError(
-            "Silver result returned by MCP is not a JSON object."
+        raise ValueError("Silver result returned by MCP is not a JSON object.")
+
+    dataset = dq_result.get("dataset")
+
+    if not isinstance(dataset, str) or not dataset.strip():
+        raise ValueError("MCP DQ result has an invalid dataset.")
+
+    for layer_name, result, expected_layer in (
+        ("Bronze", bronze_result, "bronze"),
+        ("Silver", silver_result, "silver"),
+    ):
+        if result.get("dataset") != dataset:
+            raise ValueError(
+                f"{layer_name} evidence dataset does not match DQ dataset."
+            )
+
+        if result.get("layer") != expected_layer:
+            raise ValueError(
+                f"{layer_name} evidence has an invalid layer identifier."
+            )
+
+        if not isinstance(result.get("column"), str) or not result["column"].strip():
+            raise ValueError(
+                f"{layer_name} evidence has an invalid column."
+            )
+
+        if not isinstance(result.get("path"), str) or not result["path"].strip():
+            raise ValueError(
+                f"{layer_name} evidence has an invalid storage path."
+            )
+
+        if expected_column is not None and result.get("column") != expected_column:
+            raise ValueError(
+                f"{layer_name} evidence column does not match investigation scope."
+            )
+
+        if expected_minimum is not None and result.get("minimum") != expected_minimum:
+            raise ValueError(
+                f"{layer_name} evidence minimum does not match investigation scope."
+            )
+
+        if expected_maximum is not None and result.get("maximum") != expected_maximum:
+            raise ValueError(
+                f"{layer_name} evidence maximum does not match investigation scope."
+            )
+
+        allowed_statuses = (
+            {"PASS", "FAIL", "UNAVAILABLE"}
+            if expected_layer == "silver"
+            else {"PASS", "FAIL"}
         )
 
-    if "dataset" not in dq_result:
-        raise ValueError(
-            "MCP DQ result does not contain dataset."
-        )
+        if result.get("status") not in allowed_statuses:
+            raise ValueError(
+                f"{layer_name} evidence has an unsupported status."
+            )
 
-    if bronze_result.get("dataset") != dq_result.get("dataset"):
-        raise ValueError(
-            "Bronze evidence dataset does not match DQ dataset."
-        )
+        minimum = result.get("minimum")
+        maximum = result.get("maximum")
 
-    if silver_result.get("dataset") != dq_result.get("dataset"):
-        raise ValueError(
-            "Silver evidence dataset does not match DQ dataset."
-        )
+        if (
+            isinstance(minimum, bool)
+            or not isinstance(minimum, (int, float))
+            or isinstance(maximum, bool)
+            or not isinstance(maximum, (int, float))
+        ):
+            raise ValueError(
+                f"{layer_name} evidence has invalid numeric boundaries."
+            )
+
+        if minimum > maximum:
+            raise ValueError(
+                f"{layer_name} evidence minimum exceeds maximum."
+            )
+
+        if result["status"] == "UNAVAILABLE":
+            reason = result.get("reason")
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError(
+                    "Unavailable Silver evidence requires a reason."
+                )
+            if "invalid_count" in result:
+                raise ValueError(
+                    "Unavailable Silver evidence must not claim an invalid_count."
+                )
+            continue
+
+        invalid_count = result.get("invalid_count")
+
+        if (
+            isinstance(invalid_count, bool)
+            or not isinstance(invalid_count, int)
+            or invalid_count < 0
+        ):
+            raise ValueError(
+                f"{layer_name} evidence has an invalid invalid_count."
+            )
+
+        sample_values = result.get("sample_invalid_values")
+
+        if not isinstance(sample_values, list):
+            raise ValueError(
+                f"{layer_name} evidence sample_invalid_values must be a list."
+            )
+
+        if len(sample_values) > invalid_count:
+            raise ValueError(
+                f"{layer_name} sample count exceeds invalid_count."
+            )
+
+        expected_status = "FAIL" if invalid_count > 0 else "PASS"
+
+        if result["status"] != expected_status:
+            raise ValueError(
+                f"{layer_name} status conflicts with invalid_count."
+            )
+
+    return True
+
+def validate_additional_mcp_evidence(
+    dataset,
+    column,
+    minimum,
+    maximum,
+    invalid_records,
+    remediation_audit
+):
+    """Validate invalid-record and remediation-audit MCP responses."""
+
+    if not isinstance(invalid_records, dict):
+        raise ValueError("Invalid-record MCP response must be a JSON object.")
+
+    if not isinstance(remediation_audit, dict):
+        raise ValueError("Remediation audit MCP response must be a JSON object.")
+
+    if invalid_records.get("dataset") != dataset:
+        raise ValueError("Invalid-record dataset mismatch.")
+
+    if invalid_records.get("layer") != "bronze":
+        raise ValueError("Invalid-record layer must be bronze.")
+
+    if invalid_records.get("column") != column:
+        raise ValueError("Invalid-record column mismatch.")
+
+    if invalid_records.get("minimum") != minimum:
+        raise ValueError("Invalid-record minimum boundary mismatch.")
+
+    if invalid_records.get("maximum") != maximum:
+        raise ValueError("Invalid-record maximum boundary mismatch.")
+
+    if invalid_records.get("status") not in {"PASS", "FAIL"}:
+        raise ValueError("Invalid-record response has an unsupported status.")
+
+    invalid_count = invalid_records.get("invalid_count")
+    records_returned = invalid_records.get("records_returned")
+    records = invalid_records.get("records")
+
+    if (
+        isinstance(invalid_count, bool)
+        or not isinstance(invalid_count, int)
+        or invalid_count < 0
+    ):
+        raise ValueError("Invalid-record response has an invalid count.")
+
+    if (
+        isinstance(records_returned, bool)
+        or not isinstance(records_returned, int)
+        or records_returned < 0
+    ):
+        raise ValueError("Invalid-record response has an invalid records_returned.")
+
+    if not isinstance(records, list):
+        raise ValueError("Invalid-record response records must be a list.")
+
+    if records_returned != len(records):
+        raise ValueError("Invalid-record records_returned does not match records length.")
+
+    if records_returned > invalid_count:
+        raise ValueError("Returned invalid records exceed invalid_count.")
+
+    if any(not isinstance(record, dict) for record in records):
+        raise ValueError("Invalid-record response contains a non-object record.")
+
+    expected_status = "FAIL" if invalid_count > 0 else "PASS"
+    if invalid_records["status"] != expected_status:
+        raise ValueError("Invalid-record status conflicts with invalid_count.")
+
+    if remediation_audit.get("read_only") is not True:
+        raise ValueError("Remediation audit response is not marked read-only.")
+
+    audit_count = remediation_audit.get("count")
+    audit_records = remediation_audit.get("records")
+
+    if (
+        isinstance(audit_count, bool)
+        or not isinstance(audit_count, int)
+        or audit_count < 0
+    ):
+        raise ValueError("Remediation audit has an invalid count.")
+
+    if not isinstance(audit_records, list):
+        raise ValueError("Remediation audit records must be a list.")
+
+    if audit_count != len(audit_records):
+        raise ValueError("Remediation audit count does not match records length.")
+
+    if any(not isinstance(record, dict) for record in audit_records):
+        raise ValueError("Remediation audit contains a non-object record.")
+
+    if any(record.get("dataset") != dataset for record in audit_records):
+        raise ValueError("Remediation audit contains a different dataset.")
+
+    return True
+
 
 
 # =========================================================
+# LangSmith Trace Privacy Filters
+# =========================================================
+
+def _trace_rca_inputs(inputs):
+    """Allowlist metadata and evidence summaries for LangSmith inputs."""
+
+    if not isinstance(inputs, dict):
+        return {"input_type": type(inputs).__name__}
+
+    safe = {}
+
+    for key in ("dataset", "column", "minimum", "maximum"):
+        value = inputs.get(key)
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            safe[key] = value
+
+    dq = inputs.get("dq_result")
+    if isinstance(dq, dict):
+        safe["dq_summary"] = {
+            "dataset": dq.get("dataset"),
+            "status": dq.get("status"),
+            "check_count": len(dq.get("checks", []))
+                if isinstance(dq.get("checks"), list) else None,
+        }
+
+    evidence = inputs.get("rca_evidence")
+    if isinstance(evidence, dict):
+        summary = {}
+
+        for layer in ("bronze", "silver"):
+            item = evidence.get(layer)
+            if isinstance(item, dict):
+                summary[layer] = {
+                    "status": item.get("status"),
+                    "invalid_count": item.get("invalid_count"),
+                }
+
+        invalid = evidence.get("invalid_records")
+        if isinstance(invalid, dict):
+            summary["invalid_records"] = {
+                "invalid_count": invalid.get("invalid_count"),
+                "records_returned": invalid.get("records_returned"),
+            }
+
+        audit = evidence.get("remediation_audit")
+        if isinstance(audit, dict):
+            summary["remediation_audit"] = {
+                "read_only": audit.get("read_only"),
+                "count": audit.get("count"),
+            }
+
+        safe["evidence_summary"] = summary
+
+    return safe
+
+
+def _trace_rca_outputs(output):
+    """Allowlist non-sensitive RCA result metadata for LangSmith outputs."""
+
+    if isinstance(output, str):
+        return {
+            "response_type": "text",
+            "response_length": len(output),
+        }
+
+    if not isinstance(output, dict):
+        return {"result_type": type(output).__name__}
+
+    remediation = output.get("remediation")
+    if not isinstance(remediation, dict):
+        remediation = {}
+
+    return {
+        "dataset": output.get("dataset"),
+        "dq_status": output.get("dq_status"),
+        "classification": output.get("classification"),
+        "confidence": output.get("confidence"),
+        "remediation_action": remediation.get("action"),
+        "requires_approval": remediation.get("requires_approval"),
+        "evidence_count": len(output.get("evidence", []))
+            if isinstance(output.get("evidence"), list) else None,
+        "next_action_count": len(output.get("next_actions", []))
+            if isinstance(output.get("next_actions"), list) else None,
+    }
+
+
+
+
+def _trace_evidence_outputs(output):
+    """Expose evidence summaries only, never raw MCP records."""
+    if not isinstance(output, dict):
+        return {"result_type": type(output).__name__}
+
+    summary = {}
+
+    for key in ("bronze", "silver"):
+        item = output.get(key)
+        if isinstance(item, dict):
+            summary[key] = {
+                "status": item.get("status"),
+                "invalid_count": item.get("invalid_count"),
+            }
+
+    invalid = output.get("invalid_records")
+    if isinstance(invalid, dict):
+        summary["invalid_records"] = {
+            "status": invalid.get("status"),
+            "invalid_count": invalid.get("invalid_count"),
+            "records_returned": invalid.get("records_returned"),
+        }
+
+    audit = output.get("remediation_audit")
+    if isinstance(audit, dict):
+        summary["remediation_audit"] = {
+            "read_only": audit.get("read_only"),
+            "count": audit.get("count"),
+        }
+
+    scope = output.get("investigation_scope")
+    if isinstance(scope, dict):
+        summary["investigation_scope"] = {
+            "column": scope.get("column"),
+            "minimum": scope.get("minimum"),
+            "maximum": scope.get("maximum"),
+            "rule": scope.get("rule"),
+        }
+
+    dq = output.get("dq_result")
+    if isinstance(dq, dict):
+        summary["dq_summary"] = {
+            "dataset": dq.get("dataset"),
+            "status": dq.get("status"),
+        }
+
+    return summary
+
+
+# =========================================================
+def validate_dq_result(dq_result: dict, expected_dataset: str) -> bool:
+    """Validate the DQ response before using its checks."""
+    if not isinstance(dq_result, dict):
+        raise ValueError("DQ response must be a dictionary.")
+
+    if dq_result.get("dataset") != expected_dataset:
+        raise ValueError("DQ response dataset does not match the requested dataset.")
+
+    status = dq_result.get("status")
+    if status not in {"PASS", "FAIL"}:
+        raise ValueError("DQ response status must be PASS or FAIL.")
+
+    checks = dq_result.get("checks")
+    if not isinstance(checks, list):
+        raise ValueError("DQ response checks must be a list.")
+
+    for index, check in enumerate(checks):
+        if not isinstance(check, dict):
+            raise ValueError(f"DQ check at index {index} must be a dictionary.")
+
+        check_status = check.get("status")
+        if check_status not in {"PASS", "FAIL"}:
+            raise ValueError(
+                f"DQ check at index {index} has an invalid status."
+            )
+
+        check_name = check.get("check")
+        if not isinstance(check_name, str) or not check_name.strip():
+            raise ValueError(
+                f"DQ check at index {index} has an invalid check name."
+            )
+
+        if check_name.startswith("range_check:"):
+            if not check_name.split(":", 1)[1].strip():
+                raise ValueError(
+                    f"DQ range check at index {index} has no column name."
+                )
+
+            if check_status == "FAIL":
+                range_text = check.get("range")
+                if not isinstance(range_text, str) or not range_text.strip():
+                    raise ValueError(
+                        f"Failed range check at index {index} has no valid range."
+                    )
+
+    return True
+
+
 # MCP Evidence Collection
 # =========================================================
 
 @traceable(
     name="DataPilot RCA - MCP Evidence Collection",
-    run_type="chain"
+    run_type="chain",
+    process_inputs=_trace_rca_inputs,
+    process_outputs=_trace_evidence_outputs,
+    tags=["datapilot-ai", "rca-agent", "mcp"],
+    metadata={"agent": "rca", "stage": "evidence_collection"}
 )
 def collect_mcp_evidence(dataset: str, column: str, minimum: float, maximum: float) -> dict:
     """
@@ -266,6 +910,10 @@ def collect_mcp_evidence(dataset: str, column: str, minimum: float, maximum: flo
         "get_dq_result",
         {"dataset": dataset}
     )
+
+    validate_dq_result(dq_result, dataset)
+    print("DQ response validation: PASSED")
+
     # -----------------------------------------------------
     # Derive investigation scope from failed DQ rule
     # -----------------------------------------------------
@@ -291,12 +939,29 @@ def collect_mcp_evidence(dataset: str, column: str, minimum: float, maximum: flo
                 range_text
             )
 
-            if match:
-                investigation_column = failed_column
-                investigation_minimum = float(match.group(1))
-                investigation_maximum = float(match.group(2))
-                investigation_rule = check_name
-                break
+            if not match:
+                raise ValueError(
+                    f"Failed DQ range check has an invalid range: {check_name}"
+                )
+
+            parsed_minimum = float(match.group(1))
+            parsed_maximum = float(match.group(2))
+
+            if not math.isfinite(parsed_minimum) or not math.isfinite(parsed_maximum):
+                raise ValueError(
+                    f"Failed DQ range check has non-finite boundaries: {check_name}"
+                )
+
+            if parsed_minimum > parsed_maximum:
+                raise ValueError(
+                    f"Failed DQ range check has minimum greater than maximum: {check_name}"
+                )
+
+            investigation_column = failed_column
+            investigation_minimum = parsed_minimum
+            investigation_maximum = parsed_maximum
+            investigation_rule = check_name
+            break
 
     print("\nInvestigation scope:")
     print(f"  Column  : {investigation_column}")
@@ -363,8 +1028,22 @@ def collect_mcp_evidence(dataset: str, column: str, minimum: float, maximum: flo
     validate_mcp_evidence(
         dq_result=dq_result,
         bronze_result=bronze_result,
-        silver_result=silver_result
+        silver_result=silver_result,
+        expected_column=investigation_column,
+        expected_minimum=investigation_minimum,
+        expected_maximum=investigation_maximum
     )
+
+    validate_additional_mcp_evidence(
+        dataset=dataset,
+        column=investigation_column,
+        minimum=investigation_minimum,
+        maximum=investigation_maximum,
+        invalid_records=invalid_records,
+        remediation_audit=remediation_audit
+    )
+
+    print("MCP evidence validation: PASSED")
 
     evidence_bundle = {
         "dq_result": dq_result,
@@ -391,7 +1070,11 @@ def collect_mcp_evidence(dataset: str, column: str, minimum: float, maximum: flo
 
 @traceable(
     name="DataPilot RCA - OpenAI Analysis",
-    run_type="llm"
+    run_type="llm",
+    process_inputs=_trace_rca_inputs,
+    process_outputs=_trace_rca_outputs,
+    tags=["datapilot-ai", "rca-agent", "llm"],
+    metadata={"agent": "rca", "stage": "openai_analysis"}
 )
 def analyze_with_openai(dq_result, rca_evidence):
     """
@@ -466,7 +1149,11 @@ def parse_llm_response(response_text):
 
 @traceable(
     name="DataPilot RCA Agent",
-    run_type="chain"
+    run_type="chain",
+    process_inputs=_trace_rca_inputs,
+    process_outputs=_trace_rca_outputs,
+    tags=["datapilot-ai", "rca-agent"],
+    metadata={"agent": "rca", "stage": "orchestration"}
 )
 def run_rca(
     dq_result,
@@ -484,6 +1171,14 @@ def run_rca(
     result = parse_llm_response(
         response_text
     )
+
+    result = validate_rca_result(
+    result=result,
+    dq_result=dq_result,
+    rca_evidence=rca_evidence
+    )
+
+    print("RCA output guardrail validation: PASSED")
 
     return result
 

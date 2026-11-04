@@ -5,9 +5,73 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from agents.supervisor.airflow_client import AirflowClient
+from langsmith import traceable
 import re
 import subprocess
 import sys
+
+
+def _trace_supervisor_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Allowlist non-sensitive Supervisor inputs for LangSmith."""
+    dag_run = inputs.get("dag_run")
+
+    def get_value(obj: Any, key: str) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    safe_inputs = {
+        "dag_id": get_value(dag_run, "dag_id"),
+        "dag_run_id": get_value(dag_run, "run_id"),
+    }
+
+    conf = get_value(dag_run, "conf")
+    mode = conf.get("mode") if isinstance(conf, dict) else None
+    if isinstance(mode, str) and mode.upper() in {
+        "DRY_RUN", "APPLY", "GOLD_REFRESH_ONLY"
+    }:
+        safe_inputs["mode"] = mode.upper()
+
+    if "dq_tables" in inputs:
+        safe_inputs["dq_table_count"] = len(inputs.get("dq_tables") or [])
+    if "gold_tables" in inputs:
+        safe_inputs["gold_table_count"] = len(inputs.get("gold_tables") or [])
+
+    return {key: value for key, value in safe_inputs.items() if value is not None}
+
+
+def _trace_supervisor_outputs(output: Any) -> dict[str, Any]:
+    """Return a minimal operational summary, never the full assessment."""
+    if not isinstance(output, dict):
+        return {"result_type": type(output).__name__}
+
+    pipeline = output.get("pipeline")
+    if not isinstance(pipeline, dict):
+        pipeline = {}
+
+    decision_data = output.get("supervisor_decision")
+    if isinstance(decision_data, dict):
+        decision = decision_data.get("decision")
+    else:
+        decision = decision_data
+
+    remediation = output.get("remediation_assessment")
+    if not isinstance(remediation, dict):
+        remediation = {}
+
+    safe_output = {
+        "assessment_type": output.get("assessment_type"),
+        "dag_id": pipeline.get("dag_id"),
+        "decision": decision,
+        "task_count": pipeline.get("task_count"),
+        "task_state_counts": pipeline.get("task_state_counts"),
+        "failed_task_count": pipeline.get("failed_task_count"),
+        "upstream_failed_task_count": pipeline.get("upstream_failed_task_count"),
+        "requested_mode": remediation.get("requested_mode"),
+        "execution_id_status": remediation.get("execution_id_status"),
+    }
+
+    return {key: value for key, value in safe_output.items() if value is not None}
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DQ_PATH = PROJECT_ROOT / "results/dq/olist_order_payments.json"
@@ -675,6 +739,14 @@ def invoke_rca_agent(
         "result": rca_result,
     }
 
+@traceable(
+    name="DataPilot Supervisor - Pipeline Assessment",
+    run_type="chain",
+    tags=["datapilot-ai", "supervisor", "pipeline-assessment"],
+    metadata={"agent": "supervisor", "workflow": "pipeline", "project": "datapilot-ai"},
+    process_inputs=_trace_supervisor_inputs,
+    process_outputs=_trace_supervisor_outputs,
+)
 def run_dag_assessment(
     dag_run: Any,
     dq_tables: list[str],
@@ -946,6 +1018,14 @@ def _get_remediation_execution_metadata(
         }
 
 
+@traceable(
+    name="DataPilot Supervisor - Remediation Assessment",
+    run_type="chain",
+    tags=["datapilot-ai", "supervisor", "remediation-assessment"],
+    metadata={"agent": "supervisor", "workflow": "remediation", "project": "datapilot-ai"},
+    process_inputs=_trace_supervisor_inputs,
+    process_outputs=_trace_supervisor_outputs,
+)
 def run_remediation_dag_assessment(dag_run: Any) -> dict[str, Any]:
     """Assess a remediation DAG run without executing remediation."""
 
