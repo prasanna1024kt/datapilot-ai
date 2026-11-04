@@ -24,3 +24,5 @@ __pycache__/
 tmp/
 
 .venv/.env
+secrets/
+.venv/.env

@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+openai
+pinecone
+pydantic-settings
+python-dotenv
+pypdf
+beautifulsoup4
+langsmith
+pytest
+httpx

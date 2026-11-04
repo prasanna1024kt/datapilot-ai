@@ -157,7 +157,6 @@ services:
 
     command: scheduler
 
-
   # ============================================================
   # Airflow DAG Processor
   # ============================================================
@@ -383,9 +382,22 @@ services:
       - --port
       - "8000"
 
-# ==============================================================
-# Named Volumes
-# ==============================================================
+  # ============================================================
+  # DataPilot AI Copilot API
+  # ============================================================
+
+  copilot:
+    build:
+      context: .
+      dockerfile: docker/copilot/Dockerfile
+
+    container_name: datapilot-copilot
+
+    depends_on:
+      - mcp-server
+
+    ports:
+      - "127.0.0.1:8001:8001"
 
 volumes:
   postgres_data:
