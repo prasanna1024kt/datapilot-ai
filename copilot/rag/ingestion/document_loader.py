@@ -53,17 +53,24 @@ def load_document(file_path: str) -> dict:
         "character_count": len(content),
     }
 
-
 def load_documents(directory: str) -> list[dict]:
-    root = Path(directory)
-
+    root = Path(directory).resolve()
     if not root.is_dir():
-        raise NotADirectoryError(f"Directory not found: {root}")
-
+        raise NotADirectoryError(
+            f"Directory not found: {root}"
+        )
     documents = []
 
     for path in sorted(root.rglob("*")):
         if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS:
-            documents.append(load_document(str(path)))
+            document = load_document(str(path))
+
+            relative_path = path.relative_to(root).as_posix()
+
+            document["document_id"] = relative_path
+            document["source_file"] = relative_path
+
+            documents.append(document)
 
     return documents
+

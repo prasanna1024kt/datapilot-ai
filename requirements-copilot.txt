@@ -9,3 +9,5 @@ beautifulsoup4
 langsmith
 pytest
 httpx
+ragas==0.4.3
+langchain-community==0.3.31

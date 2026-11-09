@@ -1,6 +1,5 @@
-
-from pinecone import Pinecone
-
+import time
+from pinecone import Pinecone, ServerlessSpec
 from copilot.config.settings import get_settings
 
 
@@ -65,17 +64,23 @@ class PineconeVectorStore:
 
         return len(vectors)
 
+    
     def search(
         self,
         query_embedding: list[float],
         top_k: int = 5,
         namespace: str = "datapilot-ai",
+        include_values: bool = False,
     ) -> list[dict]:
+
         if not query_embedding:
             raise ValueError("Query embedding cannot be empty")
 
         if len(query_embedding) != self.settings.pinecone_embedding_dimension:
             raise ValueError("Query embedding dimension mismatch")
+
+        if top_k < 1:
+            raise ValueError("top_k must be at least 1")
 
         index = self._get_index()
 
@@ -83,14 +88,99 @@ class PineconeVectorStore:
             vector=query_embedding,
             top_k=top_k,
             include_metadata=True,
+            include_values=include_values,
             namespace=namespace,
         )
 
-        return [
-            {
+        results = []
+
+        for match in response.matches:
+            result = {
                 "chunk_id": match.id,
                 "score": match.score,
-                "metadata": match.metadata,
+                "metadata": match.metadata or {},
             }
-            for match in response.matches
+
+            if include_values:
+                result["embedding"] = match.values
+
+            results.append(result)
+
+        return results
+
+    
+    def ensure_index(self) -> dict:
+        """
+        Create the Pinecone index if it does not exist.
+        Validate dimension if it already exists.
+        """
+
+        if self.client is None:
+            raise RuntimeError("Pinecone client is not configured")
+
+        index_name = self.settings.pinecone_index_name
+
+        existing_indexes = [
+            index.name for index in self.client.list_indexes()
         ]
+
+        if index_name not in existing_indexes:
+            self.client.create_index(
+                name=index_name,
+                dimension=self.settings.pinecone_embedding_dimension,
+                metric="cosine",
+                spec=ServerlessSpec(
+                    cloud=self.settings.pinecone_cloud,
+                    region=self.settings.pinecone_region,
+                ),
+            )
+
+            print(f"Creating Pinecone index: {index_name}")
+
+        # Wait until the index is ready
+        for _ in range(60):
+            description = self.client.describe_index(index_name)
+
+            if description.status["ready"]:
+                break
+
+            time.sleep(2)
+        else:
+            raise TimeoutError(
+                f"Pinecone index {index_name} did not become ready"
+            )
+
+        self.verify_index_dimension()
+
+        return {
+            "index_name": index_name,
+            "dimension": self.settings.pinecone_embedding_dimension,
+            "metric": "cosine",
+            "status": "ready",
+        }
+
+    def delete_documents(self, document_ids: list[str], namespace: str = "datapilot-ai") -> int:
+        """
+        Delete all vectors belonging to the specified documents.
+
+        Uses the document_id metadata field.
+        """
+        if not document_ids:
+            return 0
+        index = self._get_index()
+        deleted_documents = 0
+
+        for document_id in document_ids:
+            if not document_id or not isinstance(document_id, str):
+                raise ValueError("document_id must be a non-empty string")
+
+            index.delete(
+                filter={
+                    "document_id": {"$eq": document_id}
+                },
+                namespace=namespace,
+            )
+
+            deleted_documents += 1
+
+        return deleted_documents
