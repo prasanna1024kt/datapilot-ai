@@ -12,6 +12,8 @@ RUN pip install --no-cache-dir -r /app/copilot/requirements.txt
 
 COPY copilot/ /app/copilot/
 COPY docs/ /app/docs/
+COPY agents/ /app/agents/
+COPY tests/ /app/tests/
 
 EXPOSE 8001
 

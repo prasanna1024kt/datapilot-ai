@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 def _trace_supervisor_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
     """Allowlist non-sensitive Supervisor inputs for LangSmith."""

@@ -385,7 +385,6 @@ services:
   # ============================================================
   # DataPilot AI Copilot API
   # ============================================================
-
   copilot:
     build:
       context: .
@@ -395,12 +394,25 @@ services:
 
     depends_on:
       - mcp-server
+      - airflow
 
     ports:
       - "127.0.0.1:8001:8001"
+
     env_file:
       - path: ./.env
         required: true
+
+    environment:
+      SUPERVISOR_AIRFLOW_BASE_URL: "http://airflow:8080"
+      SUPERVISOR_AIRFLOW_USERNAME: "admin"
+      SUPERVISOR_AIRFLOW_PASSWORD_FILE: "/opt/airflow/secrets/airflow_simple_auth_passwords.json"
+      MCP_SERVER_URL: "http://mcp-server:8000/mcp"
+      PYTHONPATH: "/app"
+
+    volumes:
+      - ./secrets/airflow_simple_auth_passwords.json:/opt/airflow/secrets/airflow_simple_auth_passwords.json:ro
+      - ./results:/app/results
 
 volumes:
   postgres_data:

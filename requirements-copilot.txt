@@ -11,3 +11,5 @@ pytest
 httpx
 ragas==0.4.3
 langchain-community==0.3.31
+requests
+mcp==2.2.0
