@@ -74,4 +74,9 @@ def test_chat_endpoint_handles_missing_credentials(monkeypatch):
     )
 
     assert response.status_code == 503
-    assert "not configured" in response.json()["detail"]
+
+    error_detail = response.json()["detail"]
+
+    assert error_detail["error"] == "SERVICE_ERROR"
+    assert "not configured" in error_detail["message"]
+    assert "request_id" in error_detail

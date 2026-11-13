@@ -1,7 +1,7 @@
 import time
 from pinecone import Pinecone, ServerlessSpec
 from copilot.config.settings import get_settings
-
+import json 
 
 class PineconeVectorStore:
     def __init__(self, client=None):
@@ -36,35 +36,73 @@ class PineconeVectorStore:
 
         return True
 
-    def upsert_chunks(self, chunks: list[dict], namespace: str = "datapilot-ai"):
+    def upsert_chunks(
+        self,
+        chunks: list[dict],
+        namespace: str = "datapilot-ai",
+    ):
         if not chunks:
             return
 
         index = self._get_index()
-
         vectors = []
 
         for chunk in chunks:
+            metadata = {
+                "chunk_id": chunk["chunk_id"],
+                "document_id": chunk["document_id"],
+                "source_file": chunk["source_file"],
+                "document_type": chunk["document_type"],
+                "chunk_index": chunk["chunk_index"],
+                "content": chunk["content"],
+                "chunking_version": chunk.get("chunking_version", "unknown"),
+                "is_table": bool(chunk.get("is_table", False)),
+            }
+
+            # Preserve exact source provenance as a JSON string.
+            source_spans = chunk.get("source_spans")
+            if source_spans is not None:
+                metadata["source_spans_json"] = json.dumps(
+                    source_spans,
+                    separators=(",", ":"),
+                )
+
+            # Add optional structural metadata only when available.
+            optional_fields = [
+                "start_char",
+                "end_char",
+                "section_heading",
+                "parent_heading",
+                "heading_level",
+                "config_path",
+            ]
+
+            for field in optional_fields:
+                value = chunk.get(field)
+                if value is not None:
+                    metadata[field] = value
+
             vectors.append({
                 "id": chunk["chunk_id"],
                 "values": chunk["embedding"],
-                "metadata": {
-                    "document_id": chunk["document_id"],
-                    "source_file": chunk["source_file"],
-                    "document_type": chunk["document_type"],
-                    "chunk_index": chunk["chunk_index"],
-                    "content": chunk["content"],
-                },
+                "metadata": metadata,
             })
 
-        index.upsert(
-            vectors=vectors,
-            namespace=namespace,
-        )
+        batch_size = 50
+        total_upserted = 0
 
-        return len(vectors)
+        for start in range(0, len(vectors), batch_size):
+            batch = vectors[start:start + batch_size]
 
-    
+            index.upsert(
+                vectors=batch,
+                namespace=namespace,
+            )
+
+            total_upserted += len(batch)
+
+        return total_upserted
+
     def search(
         self,
         query_embedding: list[float],

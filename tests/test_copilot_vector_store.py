@@ -1,7 +1,7 @@
 
 from types import SimpleNamespace
 from unittest.mock import Mock
-
+import json
 import pytest
 
 from copilot.rag.vector_store import PineconeVectorStore
@@ -133,3 +133,49 @@ def test_missing_client_rejected(monkeypatch):
 
     with pytest.raises(RuntimeError, match="not configured"):
         store.search([0.1] * 1536)
+
+def test_upsert_chunks_preserves_v3_provenance(mock_pinecone):
+    client, index = mock_pinecone
+    store = PineconeVectorStore(client=client)
+
+    chunks = [{
+        "chunk_id": "chunk-v3-001",
+        "document_id": "doc-001",
+        "source_file": "architecture.md",
+        "document_type": "md",
+        "chunk_index": 0,
+        "content": "Example architecture content",
+        "embedding": [0.1] * 1536,
+        "chunking_version": "v3",
+        "is_table": True,
+        "start_char": 10,
+        "end_char": 100,
+        "section_heading": "Architecture",
+        "parent_heading": "DataPilot AI",
+        "heading_level": 2,
+        "config_path": None,
+        "source_spans": [
+            {"start_char": 10, "end_char": 50},
+            {"start_char": 60, "end_char": 100},
+        ],
+    }]
+
+    result = store.upsert_chunks(chunks)
+
+    assert result == 1
+
+    payload = index.upsert.call_args.kwargs["vectors"][0]
+    metadata = payload["metadata"]
+
+    assert metadata["chunking_version"] == "v3"
+    assert metadata["is_table"] is True
+    assert metadata["section_heading"] == "Architecture"
+    assert metadata["parent_heading"] == "DataPilot AI"
+    assert metadata["heading_level"] == 2
+
+    assert json.loads(metadata["source_spans_json"]) == [
+        {"start_char": 10, "end_char": 50},
+        {"start_char": 60, "end_char": 100},
+    ]
+
+    assert "config_path" not in metadata

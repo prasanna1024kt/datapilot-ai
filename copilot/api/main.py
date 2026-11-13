@@ -746,7 +746,9 @@ def chat(request: ChatRequest):
             top_k=5,
             candidate_k=20,
             similarity_threshold=0.40,
-            strategy="similarity",
+            strategy="mmr",
+            mmr_lambda=0.70,
+            max_chunks_per_document=1,
         )
 
         retrieved_chunks = retriever.retrieve(request.question)

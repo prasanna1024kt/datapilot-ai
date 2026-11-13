@@ -25,12 +25,13 @@ CANDIDATE_K = 20
 DOCUMENT_K = 5
 
 EXPERIMENT_THRESHOLD = 0.40
-PRODUCTION_THRESHOLD = 0.70
+PRODUCTION_THRESHOLD = 0.40
+EVALUATION_NAMESPACE = "datapilot-ai-v3-1-evaluation"
 
 MMR_LAMBDA = 0.70
 
 REPORT_DIRECTORY = Path(
-    "/app/copilot/rag/evaluation/reports"
+    "/app/results/rag-evaluation"
 )
 
 REPORT_FILE = (
@@ -41,54 +42,63 @@ REPORT_FILE = (
 # ============================================================
 # RETRIEVER INITIALIZATION
 # ============================================================
+# ============================================================
+# RETRIEVER INITIALIZATION
+# ============================================================
 
 # Baseline candidate retriever.
-# Retrieves top 20 chunks without applying a threshold.
 candidate_retriever = RAGRetriever(
     top_k=CANDIDATE_K,
     candidate_k=CANDIDATE_K,
     similarity_threshold=0.0,
     strategy="similarity",
+    namespace=EVALUATION_NAMESPACE,
 )
 
 
 # Similarity strategy.
-# Retrieves top 5 chunks using similarity ranking.
 similarity_retriever = RAGRetriever(
     top_k=DOCUMENT_K,
     candidate_k=CANDIDATE_K,
     similarity_threshold=EXPERIMENT_THRESHOLD,
     strategy="similarity",
+    namespace=EVALUATION_NAMESPACE,
 )
 
 
 # MMR strategy.
-# Retrieves diverse chunks with document-level diversity.
 mmr_retriever = RAGRetriever(
     top_k=DOCUMENT_K,
     candidate_k=CANDIDATE_K,
     similarity_threshold=EXPERIMENT_THRESHOLD,
     strategy="mmr",
     mmr_lambda=MMR_LAMBDA,
+    max_chunks_per_document=1,
+    namespace=EVALUATION_NAMESPACE,
 )
 
+
 # Production-equivalent retriever.
-# Must match the live Copilot API configuration.
+# Matches the live Copilot API configuration.
 production_retriever = RAGRetriever(
     top_k=DOCUMENT_K,
     candidate_k=CANDIDATE_K,
     similarity_threshold=PRODUCTION_THRESHOLD,
-    strategy="similarity",
+    strategy="mmr",
+    mmr_lambda=MMR_LAMBDA,
+    max_chunks_per_document=1,
+    namespace=EVALUATION_NAMESPACE,
 )
 
+
 # Multi-Query strategy.
-# Uses deterministic query expansion and Reciprocal Rank Fusion.
 multi_query_retriever = RAGRetriever(
     top_k=DOCUMENT_K,
     candidate_k=CANDIDATE_K,
     similarity_threshold=EXPERIMENT_THRESHOLD,
     strategy="multi_query",
     max_chunks_per_document=1,
+    namespace=EVALUATION_NAMESPACE,
 )
 
 # ============================================================

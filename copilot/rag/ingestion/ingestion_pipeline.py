@@ -14,11 +14,13 @@ class RAGIngestionPipeline:
         vector_store=None,
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
+        namespace: str = "datapilot-ai",
     ):
         self.embedding_service = embedding_service
         self.vector_store = vector_store
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.namespace = namespace
 
     def ingest(
         self,
@@ -65,7 +67,7 @@ class RAGIngestionPipeline:
 
         result["embeddings_generated"] = len(embedded_chunks)
 
-        upserted = self.vector_store.upsert_chunks(embedded_chunks)
+        upserted = self.vector_store.upsert_chunks(embedded_chunks, namespace=self.namespace)
 
         result["vectors_upserted"] = upserted or 0
 

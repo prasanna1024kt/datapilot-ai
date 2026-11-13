@@ -62,19 +62,22 @@ def test_similarity_threshold_filtering(mock_dependencies):
     assert len(results) == 1
     assert results[0]["score"] == 0.95
 
-
 def test_top_k_configuration(mock_dependencies):
     embedding, store = mock_dependencies
+
     retriever = RAGRetriever(
         embedding,
         store,
         top_k=3,
+        candidate_k=10,
     )
-
-    retriever.retrieve("Payment failure")
-
-    assert store.search.call_args.kwargs["top_k"] == 3
-
+    results = retriever.retrieve("Payment failure")
+    # Pinecone fetches candidate_k records.
+    assert store.search.call_args.kwargs["top_k"] == 10
+    # Retriever returns no more than top_k records.
+    assert len(results) <= 3
+    assert retriever.top_k == 3
+    assert retriever.candidate_k == 10
 
 def test_empty_question_rejected(mock_dependencies):
     embedding, store = mock_dependencies
@@ -130,3 +133,56 @@ def test_invalid_similarity_threshold(mock_dependencies):
             store,
             similarity_threshold=1.5,
         )
+
+def test_similarity_enforces_max_chunks_per_document(mock_dependencies):
+    embedding, store = mock_dependencies
+
+    store.search.return_value = [
+        {
+            "chunk_id": "chunk-001",
+            "score": 0.95,
+            "metadata": {
+                "content": "First chunk from document A",
+                "source_file": "document_a.md",
+                "document_id": "doc-A",
+            },
+        },
+        {
+            "chunk_id": "chunk-002",
+            "score": 0.93,
+            "metadata": {
+                "content": "Second chunk from document A",
+                "source_file": "document_a.md",
+                "document_id": "doc-A",
+            },
+        },
+        {
+            "chunk_id": "chunk-003",
+            "score": 0.90,
+            "metadata": {
+                "content": "First chunk from document B",
+                "source_file": "document_b.md",
+                "document_id": "doc-B",
+            },
+        },
+    ]
+
+    retriever = RAGRetriever(
+        embedding,
+        store,
+        top_k=2,
+        candidate_k=3,
+        similarity_threshold=0.40,
+        max_chunks_per_document=1,
+    )
+
+    results = retriever.retrieve("Explain the architecture")
+
+    assert len(results) == 2
+    assert [item["chunk_id"] for item in results] == [
+        "chunk-001",
+        "chunk-003",
+    ]
+
+    document_ids = [item["document_id"] for item in results]
+    assert len(document_ids) == len(set(document_ids))

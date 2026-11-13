@@ -17,6 +17,7 @@ class RAGRetriever:
         strategy: str = "similarity",
         mmr_lambda: float = 0.70,
         max_chunks_per_document: int = 1,
+        namespace: str = "datapilot-ai",
     ):
 
         if top_k < 1:
@@ -65,6 +66,7 @@ class RAGRetriever:
         self.similarity_threshold = similarity_threshold
         self.strategy = strategy
         self.mmr_lambda = mmr_lambda
+        self.namespace = namespace
 
     @staticmethod
     def cosine_similarity(vector_a, vector_b):
@@ -232,6 +234,7 @@ class RAGRetriever:
             matches = self.vector_store.search(
                 query_embedding=query_embedding,
                 top_k=self.candidate_k,
+                namespace=self.namespace,
                 include_values=False,
             )
 
@@ -332,6 +335,7 @@ class RAGRetriever:
         matches = self.vector_store.search(
             query_embedding=query_embedding,
             top_k=self.candidate_k,
+            namespace=self.namespace,
             include_values=(self.strategy == "mmr"),
         )
 
@@ -376,9 +380,30 @@ class RAGRetriever:
 
         if self.strategy == "mmr":
             selected = self._select_mmr(candidates)
-        else:
-            selected = candidates[:self.top_k]
 
+        else:
+            selected = []
+            document_counts = {}
+
+            for candidate in candidates:
+                document_id = candidate.get("document_id")
+
+                document_key = (
+                    document_id
+                    if document_id
+                    else candidate["chunk_id"]
+                )
+
+                count = document_counts.get(document_key, 0)
+
+                if count >= self.max_chunks_per_document:
+                    continue
+
+                selected.append(candidate)
+                document_counts[document_key] = count + 1
+
+                if len(selected) >= self.top_k:
+                    break
         # Never expose embedding vectors to the LLM or API.
         return [
             {
