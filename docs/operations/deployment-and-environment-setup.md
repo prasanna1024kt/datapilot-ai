@@ -310,7 +310,234 @@ These are the dependencies explicitly declared in the supplied Compose file. The
 - No Copilot API service appears in the supplied Compose file.
 - The supplied Compose configuration does not define a health check for Airflow, Spark or MCP services.
 
-## 10. Security observations
+## 10. PostgreSQL Backup and Recovery
+
+### 10.1 Purpose
+
+DataPilot AI uses PostgreSQL 16 to maintain Airflow metadata and configured audit data.
+
+Regular database backups provide a recovery point if the PostgreSQL database becomes corrupted, unavailable or requires restoration.
+
+The PostgreSQL database is named `airflow`, and the configured database user is `airflow`.
+
+### 10.2 Backup configuration
+
+| Setting | Value |
+|---|---|
+| Database service | `postgres` |
+| Container | `datapilot-postgres` |
+| Database | `airflow` |
+| Database user | `airflow` |
+| PostgreSQL version observed | 16.15 |
+| Backup utility | `pg_dump` |
+| Backup format | Custom (`-Fc`) |
+| Backup directory | `backups/postgres/` |
+| File extension | `.dump` |
+
+PostgreSQL data is persisted in the Docker volume `postgres_data`.
+
+### 10.3 Create a database backup
+
+Create the backup directory:
+
+```bash
+mkdir -p backups/postgres
+```
+
+Generate a timestamped backup:
+
+```bash
+BACKUP_FILE="backups/postgres/airflow_$(date +%Y%m%d_%H%M%S).dump"
+
+docker-compose exec -T postgres \\
+  pg_dump -U airflow -d airflow -Fc \\
+  > "$BACKUP_FILE"
+
+echo "Backup file: $BACKUP_FILE"
+ls -lh "$BACKUP_FILE"
+```
+
+The `-Fc` option generates a PostgreSQL custom-format archive, which supports inspection and flexible restoration through `pg_restore`.
+
+### 10.4 Validate the backup archive
+
+Identify the latest backup:
+
+```bash
+LATEST_BACKUP=$(ls -t backups/postgres/*.dump | head -n 1)
+```
+
+Inspect the archive:
+
+```bash
+docker-compose exec -T postgres \\
+  pg_restore --list < "$LATEST_BACKUP" | head -20
+```
+
+A valid archive should display its database name, archive format, PostgreSQL version and table-of-contents entries.
+
+### 10.5 Restore into an isolated test database
+
+Never use the live `airflow` database for a recovery test.
+
+First, check whether the temporary database already exists:
+
+```bash
+docker-compose exec postgres \\
+  psql -U airflow -d postgres -c \\
+  "SELECT datname FROM pg_database
+   WHERE datname = 'airflow_restore_test';"
+```
+
+Create the temporary database if it does not exist:
+
+```bash
+docker-compose exec postgres \\
+  createdb -U airflow airflow_restore_test
+```
+
+Restore the backup:
+
+```bash
+LATEST_BACKUP=$(ls -t backups/postgres/*.dump | head -n 1)
+
+docker-compose exec -T postgres \\
+  pg_restore -U airflow \\
+  -d airflow_restore_test \\
+  --no-owner \\
+  --no-privileges \\
+  < "$LATEST_BACKUP"
+```
+
+### 10.6 Verify the restored database
+
+Compare the number of user tables:
+
+```sql
+SELECT COUNT(*) AS table_count
+FROM information_schema.tables
+WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+AND table_type = 'BASE TABLE';
+```
+
+Compare important Airflow and DataPilot audit table record counts:
+
+```sql
+SELECT 'dag' AS table_name, COUNT(*) FROM dag
+UNION ALL
+SELECT 'dag_run', COUNT(*) FROM dag_run
+UNION ALL
+SELECT 'task_instance', COUNT(*) FROM task_instance
+UNION ALL
+SELECT 'variable', COUNT(*) FROM variable
+UNION ALL
+SELECT 'connection', COUNT(*) FROM connection
+UNION ALL
+SELECT 'remediation_execution_summary',
+       COUNT(*) FROM datapilot_audit.remediation_execution_summary
+ORDER BY table_name;
+```
+
+Execute the queries against both `airflow` and `airflow_restore_test`.
+
+Matching table counts and selected record counts provide evidence that the restore completed successfully.
+
+### 10.7 Remove the temporary restore database
+
+After completing the restore validation, disconnect any remaining sessions connected to the temporary database.
+
+Inspect sessions:
+
+```sql
+SELECT pid, usename, application_name, state
+FROM pg_stat_activity
+WHERE datname = 'airflow_restore_test';
+```
+
+Terminate only sessions connected to the temporary test database, if required:
+
+```sql
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE datname = 'airflow_restore_test'
+AND pid <> pg_backend_pid();
+```
+
+Drop the temporary database:
+
+```bash
+docker-compose exec postgres \\
+  dropdb -U airflow airflow_restore_test
+```
+
+Verify removal:
+
+```bash
+docker-compose exec postgres \\
+  psql -U airflow -d postgres -c \\
+  "SELECT datname FROM pg_database
+   WHERE datname = 'airflow_restore_test';"
+```
+
+The expected result is zero rows.
+
+### 10.8 Backup Git exclusion
+
+Database backup files must not be committed to Git.
+
+The project `.gitignore` contains:
+
+```gitignore
+# Database backups
+backups/
+```
+
+Verify the exclusion:
+
+```bash
+git check-ignore backups/postgres/<backup-file>.dump
+```
+
+Backup files should be stored with appropriate filesystem access restrictions and copied to a separate protected storage location for disaster recovery.
+
+### 10.9 Validation results
+
+The following backup and recovery test was completed on November 16, 2026.
+
+| Validation | Observed result |
+|---|---|
+| Source database size | 13 MB |
+| Backup format | Custom |
+| Archive table-of-contents entries | 486 |
+| Archive inspection | Successful |
+| Original user tables | 72 |
+| Restored user tables | 72 |
+| DAG records | 6 |
+| DAG run records | 28 |
+| Task instance records | 275 |
+| Variable records | 0 |
+| Connection records | 2 |
+| Remediation execution summary records | 9 |
+| Temporary restore database cleanup | Successful |
+
+All six selected table record counts matched between the original and restored databases.
+
+The temporary restore database was removed after successful validation. The live Airflow database was not overwritten.
+
+### 10.10 Future operational improvements
+
+The following capabilities are not yet implemented or validated:
+
+- Scheduled automated PostgreSQL backups.
+- Defined backup retention policy.
+- Off-site or remote backup storage.
+- Automated backup integrity monitoring.
+- Periodic automated restore testing.
+- Documented recovery time objective (RTO) and recovery point objective (RPO).
+
+These should be addressed before treating the local development deployment as a fully production-ready disaster recovery solution.
+
+## 11. Security observations
 
 The supplied Compose file includes local-development-style authentication values and a static JWT secret directly in the configuration. It also defines a simple-auth user value in an environment setting. These values must not be treated as production-safe defaults.
 
@@ -325,7 +552,7 @@ Before sharing the repository or deploying beyond a private development environm
 
 This document intentionally does not reproduce the literal JWT secret or password values from the supplied Compose file.
 
-## 11. Items requiring confirmation before finalizing the runbook
+## 12. Items requiring confirmation before finalizing the runbook
 
 The following deployment details were not established by the supplied Dockerfiles and Compose file:
 
@@ -340,7 +567,7 @@ The following deployment details were not established by the supplied Dockerfile
 
 These items should be added only after checking the corresponding repository files or operational procedure.
 
-## 12. Local Docker image inventory (observed)
+## 13. Local Docker image inventory (observed)
 
 The user supplied the output of:
 
@@ -366,7 +593,7 @@ The following tagged images were present at the time of inspection:
 
 The output also contained multiple `<none>:<none>` images. These are untagged images, commonly called dangling or intermediate images. The listing alone does not establish whether each is safe to remove, so no cleanup action is recommended based only on this output.
 
-### 12.1 Observations
+### 13.1 Observations
 
 - The Spark master, worker and debug service image names are present and share the same image ID in this snapshot.
 - The Airflow API server, scheduler and DAG processor have separate repository tags and image IDs.
@@ -374,7 +601,7 @@ The output also contained multiple `<none>:<none>` images. These are untagged im
 - The base tag `datapilotai-spark:latest`, referenced in `mcp_server/Dockerfile`, is present in this image listing (image ID `203363eeb3ea`). The Spark master, worker and debug image tags also point to that same image ID in this snapshot.
 - This is a point-in-time local image inventory, not a guarantee that the images remain present.
 
-## 13. Running Compose containers (observed)
+## 14. Running Compose containers (observed)
 
 The user supplied the output of:
 
@@ -396,7 +623,7 @@ Nine long-running containers were listed:
 | `spark-master` | `datapilot-spark-master` | `datapilotai-spark-master` | Up 7 days | `7077:7077`, `8081:8080` |
 | `spark-worker` | `datapilot-spark-worker` | `datapilotai-spark-worker` | Up 7 days | None |
 
-### 13.1 Runtime observations and limitations
+### 14.1 Runtime observations and limitations
 
 - All nine listed long-running containers were in `Up` state at the time of the command.
 - PostgreSQL is the only container explicitly marked `healthy` in this output. The other `Up` statuses do not by themselves prove application-level readiness.
@@ -405,7 +632,7 @@ Nine long-running containers were listed:
 - This is a point-in-time snapshot. Container uptime does not establish that DAGs, MCP tools, Spark jobs, or external integrations are functioning correctly.
 - No service restart, DAG trigger, or application write was performed as part of this inspection.
 
-## 14. Airflow initialization container (observed)
+## 15. Airflow initialization container (observed)
 
 The user supplied the output of:
 
@@ -425,11 +652,9 @@ This output does not independently prove the current health of the Airflow metad
 
 No initialization command was rerun.
 
-## 15. Source files reviewed
+## 16. Source files reviewed
 
 - `docker-compose.yml`
 - `docker/spark/Dockerfile`
 - `docker/airflow/Dockerfile`
 - `mcp_server/Dockerfile`
-
-The placeholder `readme.md` and `de_readme.md` files were excluded from this deployment reference because they are not project documentation.
