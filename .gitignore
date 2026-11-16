@@ -26,3 +26,6 @@ tmp/
 .venv/.env
 secrets/
 .venv/.env
+
+# Database backups
+backups/
