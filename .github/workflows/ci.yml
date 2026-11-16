@@ -38,6 +38,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-copilot.txt
 
+      - name: Install Spark Python dependency
+        run: pip install pyspark==4.1.3
+
       - name: Prepare CI-only environment
         run: |
           cat > .env <<'EOF'
