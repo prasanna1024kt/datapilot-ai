@@ -1,449 +1,232 @@
 # DataPilot AI – End-to-End Architecture
 
-## 1. Project Overview
+## 1. Project overview
 
-DataPilot AI is an AI-assisted data engineering and DataOps platform. It demonstrates data pipeline orchestration, distributed processing, data quality validation, root-cause analysis, controlled remediation, operational supervision, and a planned RAG-powered AI Data Engineering Copilot.
+DataPilot AI is an AI-assisted data engineering and DataOps portfolio platform. It brings together configuration-driven data processing, data-quality validation, root-cause analysis, controlled remediation, operational supervision, and a retrieval-augmented Data Engineering Copilot.
 
-The current data engineering workflows use the Olist e-commerce dataset. The platform combines cloud data engineering services with Python-based AI agents and Model Context Protocol (MCP) integration.
+The project uses the Olist e-commerce dataset for its data engineering workflows. Its architecture combines Apache Airflow, Apache Spark/PySpark, a reusable data-processing framework, Python agents, a Model Context Protocol (MCP) server, FastAPI, Pinecone, and OpenAI services.
 
-## 2. Architecture Objectives
+The portfolio is currently focused on local execution and demonstrable engineering workflows. AWS deployment is deferred; S3 and AWS Glue remain part of the cloud-oriented target architecture and configuration, not evidence of a completed cloud deployment.
 
-- Build a configuration-driven data engineering platform.
-- Implement Bronze, Silver, and Gold data processing.
-- Support reusable PySpark transformations.
-- Implement configurable data quality checks.
-- Automate root-cause analysis through an RCA agent.
-- Generate remediation plans through a remediation agent.
-- Enforce human approval before authorized data writes.
-- Maintain execution history and audit records.
-- Use a Supervisor agent to assess pipeline and remediation outcomes.
-- Develop a RAG-powered AI Data Engineering Copilot.
+## 2. Architecture objectives
 
-## 3. High-Level Architecture
+- Provide configuration-driven Bronze, Silver, and Gold data processing.
+- Orchestrate data workflows with Airflow and process data with Spark/PySpark.
+- Apply reusable data-quality rules and produce machine-readable results.
+- Investigate data-quality failures through an RCA workflow.
+- Generate remediation plans with fingerprints and human approval controls.
+- Keep remediation execution bounded by explicit dataset, action, mode, and approval checks.
+- Assess pipeline and remediation outcomes with the Supervisor Agent.
+- Expose selected platform capabilities through MCP tools.
+- Provide knowledge ingestion, vector retrieval, and LLM-generated responses through the Copilot API.
+- Preserve test evidence, operational documentation, and known limitations for technical review.
 
-The platform is organized into these logical layers:
+## 3. Logical architecture
 
-1. Data storage: Amazon S3.
-2. Data processing: Apache Spark and PySpark.
-3. Orchestration: Apache Airflow.
-4. Catalog and table format: AWS Glue Data Catalog and Apache Iceberg.
-5. Data quality: configurable PySpark DQ framework.
-6. AI agents: RCA, Remediation, and Supervisor.
-7. Tool integration: MCP server.
-8. Observability: LangSmith.
-9. AI Copilot: FastAPI, retrieval, Pinecone, and LLM integration (under development).
+1. **Data processing:** Apache Spark and PySpark.
+2. **Orchestration:** Apache Airflow.
+3. **Data quality:** reusable configurable PySpark DQ framework.
+4. **Table and storage architecture:** Apache Iceberg, with AWS S3 and Glue in the cloud-oriented configuration.
+5. **Agents:** RCA, Remediation, and Supervisor.
+6. **Tool integration:** MCP server and selected platform tools.
+7. **Copilot API:** FastAPI application.
+8. **Knowledge retrieval:** document loading/chunking, embedding generation, Pinecone vector storage, and retrieval.
+9. **LLM response generation:** OpenAI integration using retrieved context.
+10. **Observability:** LangSmith tracing for the agent workflows where tracing is configured. Do not assume Copilot tracing is active unless verified separately.
 
-The existing pipeline, agent, and remediation workflows are implemented. The Copilot/RAG service has foundational modules but is not yet an end-to-end operational capability.
+## 4. Technology and implementation status
 
-## 4. Infrastructure and Technology Stack
+| Layer | Technology | Current evidence-based status |
+|---|---|---|
+| Processing | Spark / PySpark | Implemented; project tests and local services have been exercised |
+| Orchestration | Airflow | Implemented; DAGs and local Compose services exist |
+| Data quality | Custom PySpark framework | Implemented; tests and DQ workflow documentation exist |
+| Table format | Apache Iceberg | Implemented for the documented Gold/quarantine workflows; cloud catalog/storage configuration remains environment-dependent |
+| Storage/catalog | S3 / AWS Glue | Configured target architecture; AWS deployment is deferred |
+| RCA Agent | Python | Implemented; v1 hardening reported complete |
+| Remediation Agent/executor | Python / Spark / Iceberg | Implemented with restricted DRY_RUN/APPLY paths and approval/fingerprint checks; see limitations |
+| Supervisor Agent | Python | Implemented; reported complete |
+| MCP | MCP server | Implemented with read and remediation-related tools; tool-level controls and authentication limitations are documented separately |
+| Copilot API | FastAPI | Implemented; API and component tests exist |
+| Vector retrieval | Pinecone | Integration exercised; 316 vectors were reported ingested in the `datapilot-ai` namespace of `datapilot-ai-knowledge` |
+| Embeddings and generation | OpenAI | Ingestion and response-generation paths have been exercised; verify current model/settings before quoting model-specific details |
+| Observability | LangSmith | Tracing is documented for existing agent workflows; do not claim end-to-end Copilot tracing without fresh evidence |
 
-| Layer | Technology | Responsibility | Status |
-|---|---|---|---|
-| Cloud storage | Amazon S3 | Raw and processed data storage | Implemented |
-| Processing | Apache Spark / PySpark | Distributed data processing | Implemented |
-| Orchestration | Apache Airflow | DAG scheduling and task coordination | Implemented |
-| Catalog | AWS Glue Data Catalog | Iceberg table metadata | Implemented |
-| Table format | Apache Iceberg | Table storage and transactional operations | Implemented |
-| Data quality | Custom PySpark framework | Configurable DQ validation | Implemented |
-| AI agents | Python | RCA, remediation, and supervision | Implemented |
-| Tool integration | MCP | Agent access to platform capabilities | Implemented |
-| Observability | LangSmith | Agent and LLM tracing | Implemented |
-| API layer | FastAPI | Copilot API | Foundation created |
-| Vector database | Pinecone | Knowledge retrieval | Integration pending |
-| LLM integration | OpenAI | Embeddings and response generation | Integration pending |
+**Status interpretation:** “Implemented” means code and supporting tests or execution evidence exist. It does not mean every path has production-grade security, load, resilience, or end-to-end validation.
 
-## 5. Data Storage Architecture
+## 5. Data engineering architecture
 
-The project uses the S3 bucket:
+### 5.1 Orchestration
 
-`datapilot-ai-data-practice`
+Airflow coordinates the pipeline and remediation workflows. The existing documentation identifies these DAGs:
 
-Configured storage layout:
-
-```text
-s3://datapilot-ai-data-practice/
-├── raw/
-└── processed/
-    ├── bronze/
-    ├── silver/
-    ├── gold/
-    └── quarantine/
-```
-
-Storage paths and formats are centrally configured in `config/variables.yaml`.
-
-Configured formats:
-- Raw: CSV
-- Bronze: Parquet
-- Silver: Parquet
-- Gold: Parquet
-
-The quarantine workflow uses an Iceberg table registered through AWS Glue Data Catalog. Its dataset-specific configuration is maintained under `config/quarantine/`.
-
-## 6. Data Engineering Architecture
-
-### 6.1 Orchestration
-
-Apache Airflow coordinates the data pipeline and remediation workflows.
-
-The main pipeline DAG ID is `datapilot_olist_order_pipeline`.
-
-The pipeline coordinates:
-- Bronze processing
-- Silver processing
-- Data quality validation
-- RCA execution when the relevant DQ failure condition is met
-- Gold processing
-- Gold business summary
-- Supervisor assessment
-
-Separate DAGs implement the remediation and approval workflows:
+- `datapilot_olist_order_pipeline`
 - `datapilot_olist_data_remediation`
 - `datapilot_remediation_approval`
 
-### 6.2 Reusable Spark Framework
+The main pipeline includes Bronze and Silver processing, DQ validation, conditional RCA, Gold processing, business summary generation, and Supervisor assessment. Remediation and approval workflows are separate from the main pipeline.
 
-The reusable Spark framework is located under `spark/framework/`.
+### 5.2 Reusable Spark framework
 
-| Component | Responsibility |
-|---|---|
-| `ConfigLoader` | Loads centralized variables and layer-specific YAML configuration |
-| `PathBuilder` | Constructs raw and layer-specific S3 paths |
-| `DataReader` | Reads data using configured Spark formats and options |
-| `DataTransformer` | Applies reusable DataFrame transformations |
-| `DataWriter` | Writes DataFrames using configured formats and write modes |
-| `DataPipeline` | Coordinates configuration-driven source, transformation, and target processing |
-| `DQEngine` | Executes configured data quality checks |
+The reusable Spark framework is under `spark/framework/`. Its documented components include configuration loading, path construction, reading, transformation, writing, pipeline coordination, and DQ execution. Dataset behavior is configuration-dependent.
 
-The generic `DataPipeline` resolves source and target paths and formats from configuration. It applies transformations when transformation configuration is supplied. The DQ framework is a separate component.
+### 5.3 Bronze and Silver
 
-### 6.3 Bronze Layer
+The Bronze layer stores ingested source datasets in the configured target format and path. The reusable Spark framework resolves input and output locations using centralized variables and dataset-level configuration.
 
-The Bronze layer stores source data in Parquet format under the configured processed-data structure. The configuration-driven Spark pipeline resolves the raw input path and Bronze target path using centralized variables and dataset configuration.
+The Silver layer applies dataset-specific transformations through the reusable `DataTransformer` framework.
 
-### 6.4 Silver Layer
+Documented transformation capabilities include:
 
-The Silver layer contains transformed datasets. The reusable `DataTransformer` supports:
-- Column-name standardization
-- String trimming
-- Data type casting
-- Timestamp conversion
-- Duplicate removal
-- Null handling
-- Row filtering
-- Column removal
+- Column-name standardization.
+- String trimming.
+- Data type casting.
+- Timestamp conversion.
+- Duplicate removal.
+- Null handling.
+- Row filtering.
+- Column removal.
 
-The actual transformations applied depend on each dataset's configuration.
+The actual transformations applied depend on each dataset's configuration and the corresponding job implementation.
 
-### 6.5 Data Quality Framework
+### 5.4 Data quality
 
-The DQ framework is implemented under `spark/framework/dq/`.
+The DQ framework supports row-count, required-column, null, duplicate, and range checks. The DQ job writes machine-readable reports under `results/dq/`. A failed DQ result can fail the corresponding Airflow task and provide evidence for RCA.
 
-Supported checks:
-- Row-count validation
-- Required-column validation
-- Null checks
-- Duplicate checks
-- Range checks
+### 5.5 Gold
 
-Dataset-level DQ configurations are maintained under `config/dq/`.
+The Gold layer uses Apache Iceberg tables and contains two distinct processing paths.
 
-The `spark/jobs/run_dq.py` job reads Silver Parquet data, executes configured checks, and writes a JSON report under `results/dq/`. A failed DQ result raises an error so Airflow can record the task failure.
+**1. Incremental Iceberg processing**
 
-### 6.6 Gold Layer
+The incremental processing workflow uses `spark/jobs/gold_incremental_iceberg.py` and `config/gold_tables.yaml`.
 
-Gold processing uses Apache Iceberg and AWS Glue Data Catalog.
+Its implementation includes:
 
-The project contains two distinct Gold workflows:
+- Dataset-specific configuration.
+- Business-key validation.
+- Null and duplicate key checks.
+- Iceberg table existence checks.
+- Incremental MERGE operations.
+- Quarantine-related validation for the supported payment workflow.
 
-1. **Generic incremental Silver-to-Gold loading:** `spark/jobs/gold_incremental_iceberg.py`, driven by `config/gold_tables.yaml`. It validates configured business keys and uses Iceberg MERGE operations.
-2. **Business-level order summary:** `spark/jobs/run_gold.py` and `spark/framework/business_transformer.py`. This workflow builds the `olist_order_summary` analytical dataset from orders, order items, payments, and customers.
+**2. Olist order-summary processing**
 
-The business transformer aggregates item and payment measures by order before joining them to order-level data. This avoids multiplying order rows because of one-to-many item and payment relationships.
+The business-summary workflow uses `spark/jobs/run_gold.py` and `spark/framework/business_transformer.py`.
 
-The two Gold workflows have separate configuration and execution paths. Their warehouse and storage locations should be checked against the deployed environment before changing either configuration.
+The `BusinessTransformer` builds an order-level analytical dataset by:
 
-## 7. AI Agent Architecture
+1. Aggregating order items by `order_id` to calculate product count, total price, and freight value.
+2. Aggregating payment values by `order_id`.
+3. Selecting customer attributes such as city and state.
+4. Joining the aggregated item and payment results with orders and customer attributes.
+5. Selecting the final Gold business columns and handling missing aggregate values.
 
-DataPilot AI currently implements three major agents.
+Aggregating the one-to-many item and payment datasets before joining helps avoid multiplying order-level records during the joins.
 
-### 7.1 RCA Agent
+The resulting `olist_order_summary` table is written using Apache Iceberg format version 2. Existing tables are updated through an Iceberg MERGE operation.
 
-Location: `agents/rca/`
+The two Gold paths have separate configurations and execution behavior. Their active catalog, warehouse, and storage settings must be checked for the target environment.
 
-Responsibilities:
-- Analyze data quality failures.
-- Use available DQ evidence.
-- Identify potential root causes.
-- Produce structured RCA results.
-- Recommend corrective or remediation actions.
+## 6. Agent architecture and responsibility boundaries
 
-The RCA workflow is invoked by the pipeline when its DQ failure conditions are met. The Supervisor's Airflow DAG assessment collects evidence; it does not itself invoke the RCA agent.
+### 6.1 RCA Agent
 
-### 7.2 Remediation Agent
+The RCA Agent consumes DQ failure evidence, investigates supported conditions, and writes a structured RCA result. Its current v1 hardening is reported complete.
 
-Location: `agents/remediation/`
+### 6.2 Remediation Agent and executor
 
-Responsibilities:
-- Generate remediation plans.
-- Identify the proposed remediation action and scope.
-- Require approval for controlled execution.
-- Generate and validate plan fingerprints.
-- Coordinate approved remediation execution.
-- Maintain execution history and audit records.
+The Remediation Agent validates an RCA result and creates a fingerprinted plan, initially marked `PENDING_APPROVAL` and `DRY_RUN`. The downstream approval workflow and executor enforce additional scope and execution checks.
 
-The current quarantine execution path is deliberately restricted to the supported dataset and action described in the remediation workflow documentation.
+The documented executor supports a restricted quarantine workflow. APPLY requires explicit confirmation and a separate APPLY-scoped approval artifact. The MCP approval flow described in the tool documentation is DRY_RUN-scoped; do not imply it grants APPLY authorization.
 
-### 7.3 Supervisor Agent
+### 6.3 Supervisor Agent
 
-Location: `agents/supervisor/`
+The Supervisor assesses pipeline, DQ, RCA, and remediation evidence. It produces structured assessments and recommended next actions. It does not itself approve remediation or execute data writes.
 
-Responsibilities:
-- Assess pipeline execution outcomes.
-- Collect task, DQ, and RCA evidence.
-- Evaluate remediation workflow outcomes.
-- Produce structured operational decisions.
+## 7. Copilot and RAG architecture
 
-The Supervisor assesses outcomes; it is not the component that independently authorizes or executes remediation writes.
+The Copilot is composed of:
 
-## 8. Remediation and Governance
+- FastAPI endpoints and configuration.
+- Document loading and chunking.
+- Embedding generation.
+- Pinecone vector storage and retrieval.
+- LLM response generation using retrieved context.
 
-The remediation framework uses a human-in-the-loop execution model.
+A prior ingestion run reported 14 documents, 316 chunks, 316 embeddings, and 316 vectors upserted. The Pinecone index was reported as `datapilot-ai-knowledge`, dimension 1536, namespace `datapilot-ai`. These are historical execution results; verify current index statistics before presenting them as live state.
 
-Current quarantine workflow:
+A retrieval benchmark compared Similarity, MMR, and Multi-Query on 16 questions. The experiment found different tradeoffs between recall and ranking quality. It did not establish production latency/cost or complete generated-answer quality for every strategy. See `docs/copilot/rag-evaluation.md` (proposed companion document).
+
+The Copilot and RAG integration is completed and has been tested end-to-end. The operational path includes document ingestion and chunking, embedding generation, Pinecone vector upsert and retrieval, and LLM response generation through the Copilot API. Describe this as a completed end-to-end Copilot/RAG capability. Keep autonomous MCP/agent orchestration as a separate claim: only describe that additional orchestration as integrated if the specific workflow has also been exercised end-to-end.
+
+## 8. Human approval and remediation governance
+
+The remediation flow separates diagnosis, plan creation, approval, and execution:
 
 ```text
-DQ Failure
-    |
-    v
-RCA Analysis
-    |
-    v
-Remediation Plan
-    |
-    v
-Human Approval
-    |
-    v
-Fingerprint and Scope Validation
-    |
-    v
-DRY_RUN
-    |
-    v
-Explicit APPLY Authorization
-    |
-    v
-Iceberg Quarantine Write
-    |
-    v
-Post-commit Verification
-    |
-    v
-Execution Audit
-    |
-    v
-Gold Refresh and Supervisor Assessment
+DQ evidence
+   -> RCA result
+   -> fingerprinted remediation plan
+   -> human approval/rejection record
+   -> scope and fingerprint validation
+   -> restricted executor
+   -> execution result and audit evidence
 ```
 
-The current `QUARANTINE_RECORDS` implementation supports `olist_order_payments`.
+A pending plan is not authorization. The executor must validate the applicable approval artifact, plan fingerprint, action, dataset, execution mode, and other configured safeguards. APPLY must not be demonstrated as a routine portfolio walkthrough; use read-only or DRY_RUN evidence unless a separately authorized test environment and approval are explicitly arranged.
+### Remediation action scope
 
-Invalid payment-installment records are written to the configured quarantine Iceberg table. The quarantine writer preserves the source Silver data. Gold cleanup and refresh are separate downstream operations.
+The currently supported MCP remediation execution path is restricted to `QUARANTINE_RECORDS` for `olist_order_payments`.
 
-A separate `SOURCE_CORRECTION` mechanism exists for approved Bronze corrections. It is distinct from the quarantine workflow.
+The executor contains a separate `SOURCE_CORRECTION` action branch. This should not be presented as an equivalent, fully integrated MCP remediation workflow without separate evidence of its approval and execution path.
 
-Detailed workflow documentation: `docs/operations/remediation-workflow.md`.
+The quarantine workflow writes invalid payment records to the configured Iceberg quarantine target and includes record-verification safeguards. Source preservation and downstream Gold processing are separate concerns.
 
-## 9. MCP Integration
+## 9. MCP integration
 
-The MCP server is implemented under `mcp_server/` and deployed as a separate Docker Compose service.
+The MCP server is implemented under `mcp_server/` and runs as a separate Docker Compose service.
 
-It exposes platform capabilities to connected agents through the Model Context Protocol. The MCP service acts as a tool integration layer between agents and supported platform operations.
+It exposes selected platform capabilities through the Model Context Protocol, including:
 
-Within the Docker Compose network, services can address the MCP server by its service name. The configured MCP endpoint for Copilot settings is `http://mcp-server:8000/mcp`.
+- Data-quality and dataset inspection.
+- Remediation-plan and approval operations.
+- Remediation execution within the supported scope.
+- Operational audit retrieval.
 
-The exact tools exposed by the server should be documented from the current MCP server implementation and tool definitions.
+The Copilot configuration defines the internal MCP endpoint as:
+
+`http://mcp-server:8000/mcp`
+
+This endpoint uses the Docker Compose service name and is intended for communication within the local Compose network.
+
+The presence of MCP tools does not mean every Copilot or agent workflow is automatically orchestrated through MCP. Describe individual integrations as completed only where the corresponding workflow has been exercised.
 
 ## 10. Observability
 
-LangSmith tracing is integrated with the existing agent workflows.
+LangSmith tracing is present in the RCA and Supervisor agent implementations.
 
-The RCA and Supervisor workflows use tracing to support inspection of agent execution. The existing RCA tracing project is `datapilot-ai-rca`.
+The Copilot settings define a separate LangSmith project configuration, but tracing is disabled by default (`langsmith_tracing=False`). Do not claim active Copilot tracing without separate execution evidence.
 
-The Copilot settings define a separate configurable LangSmith project name for future Copilot tracing.
+Observability capabilities should therefore be described by component rather than as one universally integrated tracing layer.
 
-## 11. AI Data Engineering Copilot and RAG
+## 11. Repository structure
 
-The Copilot is a separate service under development. It is intended to provide a conversational interface over DataPilot's technical knowledge and approved platform tools.
+Major project components:
 
-Planned architecture:
-- FastAPI API layer
-- Configuration-driven model settings
-- Document ingestion
-- Text chunking
-- Embedding generation
-- Pinecone vector database
-- Retrieval service
-- MCP tool integration
-- LLM-based response generation
-- LangSmith tracing
+- `agents/` – RCA, remediation, and Supervisor agents.
+- `config/` – centralized pipeline, DQ, Gold, and quarantine configuration.
+- `copilot/` – FastAPI application, RAG ingestion, retrieval, and evaluation.
+- `dags/` – Airflow DAG definitions.
+- `docs/` – architecture, agent, pipeline, and operational documentation.
+- `mcp_server/` – MCP server and tool implementations.
+- `spark/framework/` – reusable Spark processing and DQ components.
+- `spark/jobs/` – Bronze, Silver, Gold, and related processing jobs.
+- `tests/` – automated component and workflow tests.
+- `docker-compose.yml` – local development service orchestration.
 
-### 11.1 Knowledge Sources
+## 12. Implementation summary
 
-Planned knowledge sources:
-- Architecture documentation
-- Pipeline documentation
-- Spark framework documentation
-- Data quality configurations
-- Agent documentation
-- Remediation workflow documentation
-- Relevant historical RCA reports
+The project has implemented its core data engineering pipeline, DQ framework, RCA workflow, controlled remediation path, Supervisor Agent, MCP service, and Copilot/RAG capability. The end-to-end data pipeline, end-to-end Copilot/RAG integration, Supervisor Agent, and RCA v1 hardening are completed milestones; Copilot/RAG integration has been tested end-to-end.
 
-Operational outputs, credentials, and sensitive execution artifacts must not be indiscriminately ingested.
-
-### 11.2 RAG Processing Flow
-
-```text
-Technical Documents
-       |
-       v
-Document Loader
-       |
-       v
-Text Chunking
-       |
-       v
-Embedding Generation
-       |
-       v
-Pinecone Vector Store
-       |
-       v
-Question Embedding
-       |
-       v
-Similarity Retrieval
-       |
-       v
-Retrieved Context
-       |
-       v
-LLM Response Generation
-       |
-       v
-Grounded Answer with Sources
-```
-
-The current codebase has foundational document-loader, chunking, embedding-service, vector-store, retriever, and ingestion-pipeline modules. Unit tests use mocked external services.
-
-The presence of these modules does not mean that live Pinecone ingestion or an end-to-end RAG query has been completed. Actual external ingestion, index verification, and full Copilot orchestration remain to be completed.
-
-RAG evaluation is intentionally deferred until the working RAG integration is complete.
-
-### 11.3 Intended Agentic Copilot Flow
-
-1. A user submits a data engineering question.
-2. The Copilot retrieves relevant technical knowledge.
-3. The orchestrator identifies the required operation.
-4. MCP tools provide access to approved platform capabilities.
-5. The LLM generates a grounded explanation or recommendation.
-6. Write operations require explicit authorization.
-7. The Copilot returns the result with supporting evidence.
-
-## 12. Security and Operational Controls
-
-Current implementation controls include:
-- Explicit approval before remediation APPLY.
-- Plan fingerprint validation.
-- Execution-scope validation.
-- Dataset and action restrictions.
-- Source preservation during quarantine.
-- Iceberg target validation.
-- Post-commit record verification.
-- Atomic execution audit creation.
-- Conservative handling of uncertain write outcomes.
-
-Credentials are maintained outside source-controlled configuration. Secrets should not be placed in documentation, source code, or committed configuration files.
-
-External service calls and persistent writes should be performed only through explicitly authorized workflows.
-
-## 13. Repository Structure
-
-Major project directories include:
-
-```text
-DataPilot AI/
-├── agents/
-│   ├── rca/
-│   ├── remediation/
-│   └── supervisor/
-├── config/
-│   ├── bronze/
-│   ├── silver/
-│   ├── dq/
-│   ├── gold/
-│   └── quarantine/
-├── copilot/
-│   ├── api/
-│   ├── config/
-│   └── rag/
-│       ├── ingestion/
-│       └── retrieval/
-├── dags/
-├── docs/
-│   ├── architecture/
-│   ├── agents/
-│   ├── operations/
-│   └── pipeline/
-├── mcp_server/
-├── spark/
-│   ├── framework/
-│   └── jobs/
-├── tests/
-└── docker-compose.yml
-```
-
-## 14. Implementation Status
-
-### Implemented
-
-- Configuration-driven Spark processing framework.
-- Bronze, Silver, and Gold processing workflows.
-- Airflow pipeline orchestration.
-- Configurable data quality framework.
-- RCA agent and its current v1 hardening.
-- Remediation agent and approval-controlled quarantine workflow.
-- Iceberg quarantine APPLY and post-commit verification.
-- Supervisor agent.
-- MCP integration.
-- LangSmith tracing for existing agent workflows.
-
-### Foundation Created; Integration Pending
-
-- Copilot FastAPI application structure.
-- Copilot configuration and settings validation.
-- Document loading and chunking.
-- Embedding service abstraction.
-- Pinecone vector-store abstraction.
-- Retrieval service.
-- Ingestion pipeline with dry-run protection.
-- Mocked unit tests for the RAG foundation.
-
-### Remaining Work
-
-- Complete technical knowledge-base documentation.
-- Create and verify the Pinecone index.
-- Perform authorized live document embedding and ingestion.
-- Verify end-to-end retrieval against the live vector store.
-- Implement LLM response generation with retrieved context and source references.
-- Implement Copilot orchestration and MCP tool integration.
-- Add safe conversational controls for read and write operations.
-- Complete RAG evaluation after the working RAG integration is operational.
-
-## 15. Architecture Summary
-
-DataPilot AI combines a configuration-driven data engineering platform with AI-assisted DataOps capabilities.
-
-Its implemented foundation provides pipeline orchestration, distributed processing, data quality validation, root-cause analysis, approval-controlled remediation, MCP-based tool integration, and operational supervision.
-
-The next major development phase is completing the RAG-powered AI Data Engineering Copilot and integrating it safely with the existing MCP tools and agents.
+The current portfolio closure focus is documentation accuracy, reproducible local demonstration, validation evidence, and explicit communication of security and evaluation limitations. AWS deployment is intentionally outside the current scope.
