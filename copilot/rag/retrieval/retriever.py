@@ -1,6 +1,6 @@
 
 import math
-
+import time
 from copilot.rag.ingestion.embedding_service import EmbeddingService
 from copilot.rag.vector_store import PineconeVectorStore
 
@@ -19,7 +19,12 @@ class RAGRetriever:
         max_chunks_per_document: int = 1,
         namespace: str = "datapilot-ai",
     ):
-
+        self.last_metrics = {
+                "embedding_latency_ms": 0.0,
+                "pinecone_query_latency_ms": 0.0,
+                "retrieval_latency_ms": 0.0,
+                "embedding_tokens": None,
+            }
         if top_k < 1:
             raise ValueError("top_k must be at least 1")
 
@@ -219,7 +224,17 @@ class RAGRetriever:
 
         queries = self._build_queries(question)
 
-        embeddings = self.embedding_service.embed_texts(queries)
+        # Measure the combined embedding call for all generated queries.
+        embedding_start = time.perf_counter()
+        try:
+            embeddings = self.embedding_service.embed_texts(queries)
+            self.last_metrics["embedding_tokens"] = (
+                self.embedding_service.last_metrics.get("total_tokens")
+            )
+        finally:
+            self.last_metrics["embedding_latency_ms"] = round(
+                (time.perf_counter() - embedding_start) * 1000, 3
+            )
 
         if len(embeddings) != len(queries):
             raise RuntimeError(
@@ -231,12 +246,18 @@ class RAGRetriever:
 
         for query_embedding in embeddings:
 
-            matches = self.vector_store.search(
-                query_embedding=query_embedding,
-                top_k=self.candidate_k,
-                namespace=self.namespace,
-                include_values=False,
-            )
+            query_start = time.perf_counter()
+            try:
+                matches = self.vector_store.search(
+                    query_embedding=query_embedding,
+                    top_k=self.candidate_k,
+                    namespace=self.namespace,
+                    include_values=False,
+                )
+            finally:
+                self.last_metrics["pinecone_query_latency_ms"] += round(
+                    (time.perf_counter() - query_start) * 1000, 3
+                )
 
             for rank, match in enumerate(matches, start=1):
 
@@ -319,98 +340,140 @@ class RAGRetriever:
         return selected
 
     
+    
     def retrieve(self, question: str) -> list[dict]:
 
         if not isinstance(question, str) or not question.strip():
             raise ValueError("Question cannot be empty")
 
+        # Reset metrics for every request.
+        self.last_metrics = {
+            "embedding_latency_ms": 0.0,
+            "pinecone_query_latency_ms": 0.0,
+            "retrieval_latency_ms": 0.0,
+            "embedding_tokens": None,
+        }
+
+        retrieval_start = time.perf_counter()
+
         # Dispatch Multi-Query before single-query retrieval.
         if self.strategy == "multi_query":
-            return self._retrieve_multi_query(question.strip())
-
-        query_embedding = self.embedding_service.embed_texts(
-            [question.strip()]
-        )[0]
-
-        matches = self.vector_store.search(
-            query_embedding=query_embedding,
-            top_k=self.candidate_k,
-            namespace=self.namespace,
-            include_values=(self.strategy == "mmr"),
-        )
-
-        candidates = []
-
-        for match in matches:
-
-            score = match.get("score")
-
-            if (
-                score is None
-                or score < self.similarity_threshold
-            ):
-                continue
-
-            metadata = match.get("metadata") or {}
-
-            candidate = {
-                "chunk_id": match["chunk_id"],
-                "score": score,
-                "content": metadata.get("content", ""),
-                "source_file": metadata.get(
-                    "source_file", "unknown"
-                ),
-                "document_id": metadata.get("document_id"),
-                "document_type": metadata.get("document_type"),
-            }
-
-            if self.strategy == "mmr":
-
-                embedding = match.get("embedding")
-
-                if embedding is None:
-                    raise RuntimeError(
-                        "MMR requires candidate embeddings. "
-                        "Enable include_values in vector search."
-                    )
-
-                candidate["embedding"] = embedding
-
-            candidates.append(candidate)
-
-        if self.strategy == "mmr":
-            selected = self._select_mmr(candidates)
-
-        else:
-            selected = []
-            document_counts = {}
-
-            for candidate in candidates:
-                document_id = candidate.get("document_id")
-
-                document_key = (
-                    document_id
-                    if document_id
-                    else candidate["chunk_id"]
+            try:
+                return self._retrieve_multi_query(question.strip())
+            finally:
+                self.last_metrics["retrieval_latency_ms"] = round(
+                    (time.perf_counter() - retrieval_start) * 1000, 3
                 )
 
-                count = document_counts.get(document_key, 0)
+        try:
+            # STEP 1: Generate query embedding.
+            embedding_start = time.perf_counter()
 
-                if count >= self.max_chunks_per_document:
+            try:
+                query_embedding = self.embedding_service.embed_texts([question.strip()])[0]
+                self.last_metrics["embedding_tokens"] = (self.embedding_service.last_metrics.get("total_tokens"))
+            finally:
+                self.last_metrics["embedding_latency_ms"] = round(
+                    (time.perf_counter() - embedding_start) * 1000, 3
+                )
+
+            # STEP 2: Search Pinecone.
+            query_start = time.perf_counter()
+
+            try:
+                matches = self.vector_store.search(
+                    query_embedding=query_embedding,
+                    top_k=self.candidate_k,
+                    namespace=self.namespace,
+                    include_values=(self.strategy == "mmr"),
+                )
+            finally:
+                self.last_metrics["pinecone_query_latency_ms"] = round(
+                    (time.perf_counter() - query_start) * 1000, 3
+                )
+
+            # STEP 3: Filter candidates.
+            candidates = []
+
+            for match in matches:
+
+                score = match.get("score")
+
+                if (
+                    score is None
+                    or score < self.similarity_threshold
+                ):
                     continue
 
-                selected.append(candidate)
-                document_counts[document_key] = count + 1
+                metadata = match.get("metadata") or {}
 
-                if len(selected) >= self.top_k:
-                    break
-        # Never expose embedding vectors to the LLM or API.
-        return [
-            {
-                key: value
-                for key, value in result.items()
-                if key != "embedding"
-            }
-            for result in selected
-        ]
+                candidate = {
+                    "chunk_id": match["chunk_id"],
+                    "score": score,
+                    "content": metadata.get("content", ""),
+                    "source_file": metadata.get(
+                        "source_file", "unknown"
+                    ),
+                    "document_id": metadata.get("document_id"),
+                    "document_type": metadata.get("document_type"),
+                }
+
+                if self.strategy == "mmr":
+
+                    embedding = match.get("embedding")
+
+                    if embedding is None:
+                        raise RuntimeError(
+                            "MMR requires candidate embeddings. "
+                            "Enable include_values in vector search."
+                        )
+
+                    candidate["embedding"] = embedding
+
+                candidates.append(candidate)
+
+            # STEP 4: Select relevant candidates.
+            if self.strategy == "mmr":
+                selected = self._select_mmr(candidates)
+
+            else:
+                selected = []
+                document_counts = {}
+
+                for candidate in candidates:
+                    document_id = candidate.get("document_id")
+
+                    document_key = (
+                        document_id
+                        if document_id
+                        else candidate["chunk_id"]
+                    )
+
+                    count = document_counts.get(document_key, 0)
+
+                    if count >= self.max_chunks_per_document:
+                        continue
+
+                    selected.append(candidate)
+                    document_counts[document_key] = count + 1
+
+                    if len(selected) >= self.top_k:
+                        break
+
+            # STEP 5: Remove embeddings before returning results.
+            # Never expose embedding vectors to the LLM or API.
+            return [
+                {
+                    key: value
+                    for key, value in result.items()
+                    if key != "embedding"
+                }
+                for result in selected
+            ]
+
+        finally:
+            self.last_metrics["retrieval_latency_ms"] = round(
+                (time.perf_counter() - retrieval_start) * 1000, 3
+            )
+
 

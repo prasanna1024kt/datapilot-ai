@@ -9,13 +9,24 @@ from copilot.rag.ingestion.embedding_service import EmbeddingService
 
 @pytest.fixture
 def mock_client():
+    from unittest.mock import Mock
+    from types import SimpleNamespace
+
     client = Mock()
-    client.embeddings.create.return_value = SimpleNamespace(
-        data=[
-            SimpleNamespace(embedding=[0.1] * 1536),
-            SimpleNamespace(embedding=[0.2] * 1536),
-        ]
-    )
+
+    def create_embeddings(model, input, dimensions):
+        return SimpleNamespace(
+            data=[
+                SimpleNamespace(
+                    embedding=[0.1] * dimensions
+                )
+                for _ in input
+            ],
+            usage=SimpleNamespace(total_tokens=10 * len(input)),
+        )
+
+    client.embeddings.create.side_effect = create_embeddings
+
     return client
 
 
@@ -49,6 +60,8 @@ def test_invalid_text_rejected(mock_client):
 
 
 def test_dimension_mismatch_detected(mock_client):
+    mock_client.embeddings.create.side_effect = None
+
     mock_client.embeddings.create.return_value = SimpleNamespace(
         data=[
             SimpleNamespace(embedding=[0.1] * 768),
@@ -105,3 +118,13 @@ def test_missing_client_rejected(monkeypatch):
 
     with pytest.raises(RuntimeError, match="OpenAI client is not configured"):
         service.embed_texts(["pipeline failure"])
+
+def test_embedding_metrics_are_recorded(mock_client):
+    service = EmbeddingService(client=mock_client)
+
+    service.embed_texts(["pipeline failure"])
+
+    assert service.last_metrics["latency_ms"] >= 0
+    assert service.last_metrics["model"] == (
+        service.settings.openai_embedding_model
+    )

@@ -1,5 +1,6 @@
 
 from pathlib import Path
+import time
 
 from openai import OpenAI
 
@@ -12,7 +13,17 @@ class LLMResponseGenerator:
         self.client = client
 
         if self.client is None and self.settings.openai_api_key:
-            self.client = OpenAI(api_key=self.settings.openai_api_key)
+            self.client = OpenAI(
+                api_key=self.settings.openai_api_key
+            )
+
+        self.last_metrics = {
+            "latency_ms": 0.0,
+            "prompt_tokens": None,
+            "completion_tokens": None,
+            "total_tokens": None,
+            "model": self.settings.openai_chat_model,
+        }
 
         prompt_path = (
             Path(__file__).resolve().parents[1]
@@ -100,33 +111,47 @@ USER QUESTION:
 {question.strip()}
 """
 
-        response = self.client.chat.completions.create(
-            model=self.settings.openai_chat_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": self.system_prompt,
-                },
-                {
-                    "role": "user",
-                    "content": user_message,
-                },
-            ],
-            temperature=0.2,
-        )
+        # Measure LLM generation latency.
+        llm_start = time.perf_counter()
+
+        try:
+            # Single OpenAI API call.
+            response = self.client.chat.completions.create(
+                model=self.settings.openai_chat_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": self.system_prompt,
+                    },
+                    {
+                        "role": "user",
+                        "content": user_message,
+                    },
+                ],
+                temperature=0.2,
+            )
+        finally:
+            llm_latency_ms = round(
+                (time.perf_counter() - llm_start) * 1000,
+                3,
+            )
 
         choices = getattr(response, "choices", None)
 
         if not choices:
-            raise RuntimeError("LLM returned no response choices")
+            raise RuntimeError(
+                "LLM returned no response choices"
+            )
 
         message = getattr(choices[0], "message", None)
         answer = getattr(message, "content", None)
 
         if not isinstance(answer, str) or not answer.strip():
-            raise RuntimeError("LLM returned an empty response")
+            raise RuntimeError(
+                "LLM returned an empty response"
+            )
 
-        # Capture provider usage when available.
+        # Capture provider token usage when available.
         usage = None
         usage_data = getattr(response, "usage", None)
 
@@ -137,17 +162,39 @@ USER QUESTION:
                 "total_tokens": usage_data.total_tokens,
             }
 
+        response_model = getattr(
+            response,
+            "model",
+            self.settings.openai_chat_model,
+        )
+
+        # Store operational metrics without storing prompts or answers.
+        self.last_metrics = {
+            "latency_ms": llm_latency_ms,
+            "prompt_tokens": (
+                usage["prompt_tokens"] if usage else None
+            ),
+            "completion_tokens": (
+                usage["completion_tokens"] if usage else None
+            ),
+            "total_tokens": (
+                usage["total_tokens"] if usage else None
+            ),
+            "model": response_model,
+        }
+
         return {
             "answer": answer.strip(),
             "sources": sources,
             "grounded": True,
             "usage": usage,
-            "model": getattr(
+            "model": response_model,
+            "response_id": getattr(
                 response,
-                "model",
-                self.settings.openai_chat_model,
+                "id",
+                None,
             ),
-            "response_id": getattr(response, "id", None),
+            "latency_ms": llm_latency_ms,
         }
 
     def _empty_response(self):
@@ -160,4 +207,5 @@ USER QUESTION:
             "grounded": False,
             "usage": None,
             "model": self.settings.openai_chat_model,
+            "latency_ms": 0.0,
         }

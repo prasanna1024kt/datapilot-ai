@@ -5,15 +5,18 @@ import pytest
 from copilot.rag.llm_response_generator import LLMResponseGenerator
 
 
+
 class MockOpenAIClient:
     def __init__(self, answer="Mock grounded answer"):
         self.answer = answer
+        self.call_count = 0
         self.chat = SimpleNamespace(
             completions=SimpleNamespace(create=self.create)
         )
         self.last_request = None
 
     def create(self, **kwargs):
+        self.call_count += 1
         self.last_request = kwargs
 
         return SimpleNamespace(
@@ -21,7 +24,14 @@ class MockOpenAIClient:
                 SimpleNamespace(
                     message=SimpleNamespace(content=self.answer)
                 )
-            ]
+            ],
+            usage=SimpleNamespace(
+                prompt_tokens=100,
+                completion_tokens=50,
+                total_tokens=150,
+            ),
+            model="gpt-4.1",
+            id="mock-response-001",
         )
 
 
@@ -113,3 +123,32 @@ def test_missing_openai_client_raises_error(monkeypatch):
                 "source_file": "pipeline.md",
             }],
         )
+
+def test_llm_metrics_are_recorded():
+    client = MockOpenAIClient()
+    generator = LLMResponseGenerator(client=client)
+
+    retrieved_chunks = [
+        {
+            "content": "DataPilot AI architecture",
+            "source_file": "architecture.md",
+            "chunk_id": "chunk-001",
+            "score": 0.95,
+        }
+    ]
+
+    result = generator.generate_response(
+        "Explain DataPilot AI",
+        retrieved_chunks,
+    )
+
+    metrics = generator.last_metrics
+
+    assert metrics["latency_ms"] >= 0
+    assert metrics["model"] == generator.settings.openai_chat_model
+
+    # Verify only one OpenAI API call was made.
+    assert client.call_count == 1
+    assert metrics["prompt_tokens"] == 100
+    assert metrics["completion_tokens"] == 50
+    assert metrics["total_tokens"] == 150

@@ -14,7 +14,11 @@ from copilot.integrations.airflow_service import AirflowService
 from copilot.integrations.mcp_service import MCPService
 from types import SimpleNamespace
 from agents.supervisor.supervisor_agent import run_dag_assessment
-
+from copilot.observability.sqlite_store import SQLiteObservabilityStore
+from copilot.observability.cost_calculator import OpenAICostCalculator
+from copilot.observability.dashboard_service import (
+    ObservabilityDashboardService,
+)
 settings = get_settings()
 DQ_TABLES = [
     "olist_customers",
@@ -90,6 +94,7 @@ class ExecutionInfo(BaseModel):
     duration_ms: int
     llm_model: Optional[str] = None
     llm_response_id: Optional[str] = None
+    stage_latency_ms: dict[str, float] = Field(default_factory=dict)
 
 
 class MetadataInfo(BaseModel):
@@ -139,6 +144,7 @@ def build_chat_response(
     selected_agent: Optional[str] = None,
     agents_invoked: Optional[list[str]] = None,
     supervisor: Optional[str] = None,
+    stage_latency_ms: Optional[dict[str, float]] = None,
 ) -> ChatResponse:
 
     sources = sources or []
@@ -173,6 +179,7 @@ def build_chat_response(
             duration_ms=duration_ms,
             llm_model=llm_model,
             llm_response_id=llm_response_id,
+            stage_latency_ms=stage_latency_ms or {},
         ),
         usage=UsageInfo(**(usage or {})),
         metadata=MetadataInfo(
@@ -759,11 +766,108 @@ def chat(request: ChatRequest):
             question=request.question,
             retrieved_chunks=retrieved_chunks,
         )
+        import logging
 
+        logger = logging.getLogger(__name__)
+
+        logger.info(
+            "RAG observability diagnostics: result_keys=%s, "
+            "model_present=%s, usage_keys=%s, retriever_metric_keys=%s, "
+            "embedding_tokens_present=%s",
+            list(result.keys()),
+            bool(result.get("model")),
+            list((result.get("usage") or {}).keys()),
+            list(retriever.last_metrics.keys()),
+            retriever.last_metrics.get("embedding_tokens") is not None,
+        )
+        stage_latency_ms = {
+            key: value
+            for key, value in retriever.last_metrics.items()
+            if key.endswith("_latency_ms")
+            and isinstance(value, (int, float))
+        }
+        stage_latency_ms["llm_generation_ms"] = float(
+            result.get("latency_ms") or 0.0
+        )
         duration_ms = int(
             (time.perf_counter() - start_time) * 1000
         )
+        # Persist successful RAG request metrics.
+        try:
+            observability_store = SQLiteObservabilityStore()
 
+            usage = result.get("usage") or {}
+            embedding_tokens = retriever.last_metrics.get(
+                "embedding_tokens"
+            )
+            prompt_tokens = usage.get("prompt_tokens")
+            completion_tokens = usage.get("completion_tokens")
+
+            # Estimate cost only when all required usage values are known.
+            # Missing usage remains NULL rather than being treated as zero.
+            cost_metrics = {}
+            token_values = (
+                embedding_tokens,
+                prompt_tokens,
+                completion_tokens,
+            )
+            if all(
+                isinstance(value, int) and not isinstance(value, bool)
+                and value >= 0
+                for value in token_values
+            ):
+                cost_metrics = OpenAICostCalculator().calculate_request_cost(
+                    embedding_tokens=embedding_tokens,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    embedding_model=settings.openai_embedding_model,
+                    llm_model=result.get("model") or settings.openai_chat_model,
+                )
+
+            observability_store.record_request({
+                "request_id": request_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "status": "success",
+                "llm_model": result.get("model"),
+                "embedding_model": settings.openai_embedding_model,
+                "embedding_latency_ms": stage_latency_ms.get(
+                    "embedding_latency_ms"
+                ),
+                "pinecone_query_latency_ms": stage_latency_ms.get(
+                    "pinecone_query_latency_ms"
+                ),
+                "retrieval_latency_ms": stage_latency_ms.get(
+                    "retrieval_latency_ms"
+                ),
+                "llm_generation_ms": stage_latency_ms.get(
+                    "llm_generation_ms"
+                ),
+                "total_request_latency_ms": duration_ms,
+                "embedding_tokens": embedding_tokens,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": usage.get("total_tokens"),
+                "embedding_cost_usd": cost_metrics.get(
+                    "embedding_cost_usd"
+                ),
+                "llm_input_cost_usd": cost_metrics.get(
+                    "llm_input_cost_usd"
+                ),
+                "llm_output_cost_usd": cost_metrics.get(
+                    "llm_output_cost_usd"
+                ),
+                "estimated_cost_usd": cost_metrics.get(
+                    "estimated_cost_usd"
+                ),
+                "currency": cost_metrics.get("currency"),
+            })
+
+        except Exception:
+            # Observability failures must not break chat responses.
+            import logging
+            logging.getLogger(__name__).exception(
+                "Failed to persist request observability metrics"
+            )
         sources = result.get("sources", [])
 
         return build_chat_response(
@@ -791,6 +895,7 @@ def chat(request: ChatRequest):
             llm_model=result.get("model"),
             llm_response_id=result.get("response_id"),
             usage=result.get("usage"),
+            stage_latency_ms=stage_latency_ms,
         )
 
     except RuntimeError as exc:
@@ -904,3 +1009,43 @@ async def remediation_audit(
                 "message": str(exc),
             },
         ) from exc
+
+
+# --------------------------------------------------
+# OBSERVABILITY DASHBOARD API
+# --------------------------------------------------
+
+@app.get("/api/v1/observability/summary")
+def observability_summary(
+    days: int = Query(30, ge=1, le=90),
+):
+    service = ObservabilityDashboardService()
+    return service.get_summary(days=days)
+
+
+@app.get("/api/v1/observability/trends")
+def observability_trends(
+    days: int = Query(30, ge=1, le=90),
+):
+    service = ObservabilityDashboardService()
+    return service.get_daily_trend(days=days)
+
+
+@app.get("/api/v1/observability/requests")
+def observability_requests(
+    limit: int = Query(20, ge=1, le=100),
+):
+    service = ObservabilityDashboardService()
+    return service.get_recent_requests(limit=limit)
+
+
+@app.get("/api/v1/observability/top-cost")
+def observability_top_cost(
+    days: int = Query(30, ge=1, le=90),
+    limit: int = Query(10, ge=1, le=100),
+):
+    service = ObservabilityDashboardService()
+    return service.get_top_cost_requests(
+        days=days,
+        limit=limit,
+    )

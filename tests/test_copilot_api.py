@@ -47,7 +47,8 @@ def test_chat_endpoint_with_context(monkeypatch):
         "/api/v1/chat",
         json={"question": "How are pipelines orchestrated?"},
     )
-
+    print("\nAPI STATUS:", response.status_code)
+    print("API RESPONSE:", response.text)
     assert response.status_code == 200
     assert response.json()["grounded"] is True
     assert len(response.json()["sources"]) == 1

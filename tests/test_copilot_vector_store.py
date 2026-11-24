@@ -179,3 +179,11 @@ def test_upsert_chunks_preserves_v3_provenance(mock_pinecone):
     ]
 
     assert "config_path" not in metadata
+
+def test_pinecone_query_latency_is_recorded(mock_pinecone):
+    client, _ = mock_pinecone
+    store = PineconeVectorStore(client=client)
+
+    store.search([0.1] * 1536)
+
+    assert store.last_metrics["query_latency_ms"] >= 0

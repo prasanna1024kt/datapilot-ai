@@ -1,6 +1,6 @@
 
 from openai import OpenAI
-
+import time
 from copilot.config.settings import get_settings
 
 
@@ -13,6 +13,11 @@ class EmbeddingService:
             self.client = OpenAI(
                 api_key=self.settings.openai_api_key
             )
+        self.last_metrics = {
+                "latency_ms": 0.0,
+                "total_tokens": None,
+                "model": self.settings.openai_embedding_model,
+            }
 
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -24,10 +29,23 @@ class EmbeddingService:
         if self.client is None:
             raise RuntimeError("OpenAI client is not configured")
 
-        response = self.client.embeddings.create(
-            model=self.settings.openai_embedding_model,
-            input=texts,
-            dimensions=self.settings.pinecone_embedding_dimension,
+        start_time = time.perf_counter()
+
+        try:
+            response = self.client.embeddings.create(
+                model=self.settings.openai_embedding_model,
+                input=texts,
+                dimensions=self.settings.pinecone_embedding_dimension,
+            )
+        finally:
+            self.last_metrics["latency_ms"] = round(
+                (time.perf_counter() - start_time) * 1000, 3
+            )
+
+        usage = getattr(response, "usage", None)
+
+        self.last_metrics["total_tokens"] = (
+            getattr(usage, "total_tokens", None) if usage else None
         )
 
         embeddings = [

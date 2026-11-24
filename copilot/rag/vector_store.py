@@ -13,6 +13,8 @@ class PineconeVectorStore:
                 api_key=self.settings.pinecone_api_key
             )
 
+        self.last_metrics = {"query_latency_ms": 0.0}
+
     def _get_index(self):
         if self.client is None:
             raise RuntimeError("Pinecone client is not configured")
@@ -122,13 +124,20 @@ class PineconeVectorStore:
 
         index = self._get_index()
 
-        response = index.query(
-            vector=query_embedding,
-            top_k=top_k,
-            include_metadata=True,
-            include_values=include_values,
-            namespace=namespace,
-        )
+        start_time = time.perf_counter()
+
+        try:
+            response = index.query(
+                vector=query_embedding,
+                top_k=top_k,
+                include_metadata=True,
+                include_values=include_values,
+                namespace=namespace,
+            )
+        finally:
+            self.last_metrics["query_latency_ms"] = round(
+                (time.perf_counter() - start_time) * 1000, 3
+            )
 
         results = []
 
