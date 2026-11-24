@@ -313,15 +313,384 @@ These are point-in-time results, not a claim that every production integration, 
 
 
 
-## 8. Running and demonstrating the project
+## 8. Running DataPilot AI Locally
 
+DataPilot AI runs locally using Docker Compose. The platform includes Apache Airflow, Apache Spark, PostgreSQL, the MCP server, and the FastAPI-based AI Copilot.
 
+### 8.1 Prerequisites
 
-DataPilot AI is intended to be demonstrated locally using the project’s Docker Compose setup. Follow the current prerequisites, configuration, startup, and service instructions in [Deployment and Environment Setup](docs/operations/deployment-and-environment-setup.md). Use the [Portfolio Demo Walkthrough](docs/operations/portfolio-demo.md) for a guided demonstration of the pipeline, DQ failure investigation, controlled remediation workflow, Supervisor assessment, and Copilot.
+Install the following tools before starting:
 
+| Requirement | Version / Configuration |
+|---|---|
+| Docker Desktop / Colima | Latest compatible version |
+| Docker Compose | `docker-compose` |
+| Python | 3.11 for CI and Copilot |
+| Apache Airflow | 3.3.1 |
+| Apache Spark | 4.1.3 |
+| Java | 17 |
+| AWS CLI | Configured AWS profile |
+| OpenAI API | Valid API key |
+| Pinecone | Configured API key and index |
+| Git | Latest stable version |
 
+### 8.2 Clone the repository
 
-Do not run write-mode remediation as part of a routine portfolio demo. Use the documented safe demonstration path and keep any APPLY operation outside the demo unless separately and explicitly authorized in a controlled environment.
+```bash
+git clone https://github.com/prasanna1024kt/datapilot-ai.git
+cd DataPilot-AI
+```
+
+Ensure Docker is running.
+
+For Mac users running Colima:
+
+```bash
+colima start
+docker info
+```
+
+### 8.3 Configure environment variables
+
+Create a local `.env` file in the repository root.
+
+Configure the required environment variables:
+
+```env
+# Application
+DATAPILOT_ENV=local
+
+# Airflow
+AIRFLOW_FERNET_KEYRING=<YOUR_FERNET_KEY>
+
+# AWS
+AWS_PROFILE=datapilot
+AWS_DEFAULT_REGION=us-east-1
+AWS_ACCESS_KEY_ID=<YOUR_AWS_ACCESS_KEY>
+AWS_SECRET_ACCESS_KEY=<YOUR_AWS_SECRET_KEY>
+
+# OpenAI
+OPENAI_API_KEY=<YOUR_OPENAI_API_KEY>
+
+# Pinecone
+PINECONE_API_KEY=<YOUR_PINECONE_API_KEY>
+
+# LangSmith
+LANGSMITH_API_KEY=<YOUR_LANGSMITH_API_KEY>
+LANGSMITH_PROJECT=datapilot-ai
+LANGSMITH_TRACING=false
+
+# MCP Audit Database
+MCP_AUDIT_DB_HOST=postgres
+MCP_AUDIT_DB_PORT=5432
+MCP_AUDIT_DB_NAME=<YOUR_AUDIT_DATABASE>
+MCP_AUDIT_DB_USER=<YOUR_DATABASE_USER>
+MCP_AUDIT_DB_PASSWORD=<YOUR_DATABASE_PASSWORD>
+```
+
+Configure the Pinecone index name and embedding settings according to the Copilot settings module.
+
+Ensure AWS credentials are available through the configured AWS profile and mounted credentials directory.
+
+**Security:** Never commit `.env`, API keys, AWS credentials, passwords, or other secrets to Git.
+
+### 8.4 Validate Docker Compose configuration
+
+Validate the Compose configuration before starting services.
+
+```bash
+docker-compose config -q
+```
+
+Expected result: successful configuration validation without errors.
+
+### 8.5 Build Docker images
+
+Build the Spark image first because the MCP server Dockerfile uses the Spark image as its base image.
+
+```bash
+# Build Spark image first
+docker-compose build spark
+
+# Build remaining project images
+docker-compose build
+```
+
+The Docker Compose environment includes:
+
+- PostgreSQL 16
+- Airflow 3.3.1
+- Spark 4.1.3
+- MCP Server
+- AI Copilot API
+
+### 8.6 Start DataPilot AI services
+
+Start the complete environment:
+
+```bash
+docker-compose up -d
+```
+
+Docker Compose manages the declared startup dependencies, including PostgreSQL initialization, Airflow services, Spark master/worker, and MCP.
+
+Verify running containers:
+
+```bash
+docker-compose ps
+```
+
+View service logs:
+
+```bash
+docker-compose logs -f
+```
+
+To inspect an individual service:
+
+```bash
+docker-compose logs -f airflow
+docker-compose logs -f spark-master
+docker-compose logs -f mcp-server
+docker-compose logs -f copilot
+```
+
+### 8.7 Access application services
+
+Once the services are running, access the following endpoints:
+
+| Component | URL |
+|---|---|
+| Airflow UI | http://localhost:8080 |
+| Spark Master UI | http://localhost:8081 |
+| MCP Server | http://localhost:8000 |
+| AI Copilot API | http://localhost:8001 |
+| Copilot Swagger UI | http://localhost:8001/docs |
+
+Airflow credentials depend on the configured local authentication setup.
+
+### 8.8 Execute data engineering pipelines
+
+1. Open the Airflow UI.
+2. Locate the DataPilot AI pipeline DAGs.
+3. Select the required Olist pipeline.
+4. Trigger the DAG.
+5. Monitor task execution and logs.
+6. Verify Bronze, Silver, and Gold outputs.
+
+The processing framework uses centralized YAML configuration to manage datasets, storage paths, formats, and processing layers.
+
+The data architecture follows:
+
+```text
+Raw
+ |
+ v
+Bronze
+ |
+ v
+Silver
+ |
+ v
+Gold (Apache Iceberg)
+```
+
+AWS S3 access is required for workflows configured to read from or write to S3. The local Docker environment does not imply that DataPilot AI has been deployed to AWS.
+
+### 8.9 Run RAG document ingestion
+
+DataPilot AI uses document ingestion, chunking, OpenAI embeddings, and Pinecone vector storage to build its engineering knowledge base.
+
+First, execute a dry run:
+
+```bash
+docker-compose exec copilot python -c \
+'from copilot.rag.ingestion.ingestion_pipeline import RAGIngestionPipeline; print(RAGIngestionPipeline().ingest(directory="/app/docs", dry_run=True))'
+```
+
+The dry run validates document loading and chunk generation without making external embedding or vector database changes.
+
+For an explicitly authorized live ingestion:
+
+```bash
+docker-compose exec copilot python -c \
+'from copilot.rag.ingestion.ingestion_pipeline import RAGIngestionPipeline; print(RAGIngestionPipeline().ingest(directory="/app/docs", dry_run=False, allow_external_operations=True))'
+```
+
+This generates embeddings and upserts vectors into Pinecone.
+
+The configured Pinecone namespace is:
+
+```text
+datapilot-ai
+```
+
+Verify the vector count using Pinecone index statistics.
+
+### 8.10 Run AI Copilot
+
+The AI Copilot exposes its functionality through FastAPI.
+
+Access:
+
+```text
+http://localhost:8001/docs
+```
+
+Use the API documentation to explore the available Copilot endpoints.
+
+The Copilot uses:
+
+- OpenAI LLM integration
+- RAG retrieval
+- Pinecone vector search
+- Engineering documentation
+- Context-aware answer generation
+
+### 8.11 Execute AI agents and MCP workflows
+
+The MCP server exposes supported operational tools through:
+
+```text
+http://localhost:8000/mcp
+```
+
+The available tools support:
+
+- Data-quality result inspection
+- Bronze and Silver data inspection
+- Invalid-record retrieval
+- RCA investigation support
+- Remediation approval and audit operations
+- Supported remediation execution workflows
+
+The Supervisor Agent coordinates agent activities and assesses operational outcomes.
+
+### 8.12 Governed remediation workflow
+
+DataPilot AI separates diagnosis, planning, approval, and execution.
+
+The remediation lifecycle is:
+
+```text
+Data Quality Failure
+        |
+        v
+    RCA Agent
+        |
+        v
+ Remediation Agent
+        |
+        v
+ Remediation Plan
+        |
+        v
+ Human Approval
+        |
+        v
+ Fingerprint Validation
+        |
+        v
+ Authorized Execution
+        |
+        v
+ PostgreSQL Audit
+```
+
+Remediation supports separate DRY_RUN and APPLY execution modes.
+
+For portfolio demonstrations, use DRY_RUN and do not modify source data. APPLY must remain subject to the project's explicit approval, fingerprint, scope, and execution safeguards.
+
+### 8.13 Run automated tests
+
+Execute the complete test suite:
+
+```bash
+PYTHONPATH=. pytest -q
+```
+
+### 8.14 Generate test coverage
+
+Run coverage analysis:
+
+```bash
+PYTHONPATH=. pytest -q \
+  --cov=copilot \
+  --cov=agents \
+  --cov=mcp_server \
+  --cov-report=term-missing \
+  --cov-report=xml:coverage.xml
+```
+
+The XML report is generated as:
+
+```text
+coverage.xml
+```
+
+### 8.15 Run Pylint code quality checks
+
+Install Pylint if it is not already installed:
+
+```bash
+pip install pylint
+```
+
+Run static code analysis:
+
+```bash
+PYTHONPATH=. pylint \
+  copilot \
+  agents \
+  mcp_server \
+  --fail-under=8.0 \
+  --output-format=colorized
+```
+
+Pylint evaluates code quality, potential errors, conventions, and maintainability.
+
+### 8.16 GitHub Actions CI
+
+DataPilot AI uses GitHub Actions to automate three independent quality checks:
+
+| Job | Responsibility |
+|---|---|
+| Pytest | Execute the complete configured test suite |
+| Coverage | Generate test coverage reports |
+| Pylint | Perform static code quality analysis |
+
+CI is triggered through the configured GitHub branch and pull request workflows.
+
+### 8.17 Stop and restart services
+
+Stop running containers without deleting persistent data:
+
+```bash
+docker-compose down
+```
+
+Restart the environment:
+
+```bash
+docker-compose up -d
+```
+
+Check container status:
+
+```bash
+docker-compose ps
+```
+
+PostgreSQL data is maintained in the persistent Docker volume.
+
+### 8.18 Important execution notes
+
+- Keep API keys and credentials in local environment configuration.
+- Verify service readiness before executing dependent workflows.
+- Use non-production data for local demonstrations.
+- Do not run APPLY remediation during routine portfolio demonstrations.
+- AWS provisioning and deployment are outside the current project scope.
+- Refer to the detailed deployment, architecture, security, and portfolio demonstration documentation for additional information.
 
 
 
