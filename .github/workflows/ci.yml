@@ -71,7 +71,17 @@ jobs:
             tests/test_copilot_api.py \
             tests/test_plan_fingerprint.py \
             tests/test_quarantine_fingerprint_guard.py \
-            tests/test_remediation_executor.py
+            tests/test_remediation_executor.py \
+            tests/test_copilot_ingestion_pipeline.py \
+            tests/test_copilot_cost_calculator.py \
+            tests/test_copilot_observability_store.py \
+            tests/test_copilot_embedding_service.py \
+            tests/test_rca_evaluation.py \
+            tests/test_copilot_retriever.py \
+            tests/test_copilot_chunker.py \
+            tests/test_copilot_vector_store.py \
+            tests/test_copilot_llm_response_generator.py 
+
 
       - name: Validate Docker Compose configuration
         run: docker compose config --quiet

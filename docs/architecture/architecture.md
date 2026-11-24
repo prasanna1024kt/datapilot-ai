@@ -32,7 +32,7 @@ The portfolio is currently focused on local execution and demonstrable engineeri
 7. **Copilot API:** FastAPI application.
 8. **Knowledge retrieval:** document loading/chunking, embedding generation, Pinecone vector storage, and retrieval.
 9. **LLM response generation:** OpenAI integration using retrieved context.
-10. **Observability:** LangSmith tracing for the agent workflows where tracing is configured. Do not assume Copilot tracing is active unless verified separately.
+10. **Observability:** LangSmith tracing for the RCA and Supervisor agent workflows, plus local Copilot API instrumentation for request latency, token usage, and estimated LLM/embedding cost. These are separate observability capabilities.
 
 ## 4. Technology and implementation status
 
@@ -50,7 +50,8 @@ The portfolio is currently focused on local execution and demonstrable engineeri
 | Copilot API | FastAPI | Implemented; API and component tests exist |
 | Vector retrieval | Pinecone | Integration exercised; 316 vectors were reported ingested in the `datapilot-ai` namespace of `datapilot-ai-knowledge` |
 | Embeddings and generation | OpenAI | Ingestion and response-generation paths have been exercised; verify current model/settings before quoting model-specific details |
-| Observability | LangSmith | Tracing is documented for existing agent workflows; do not claim end-to-end Copilot tracing without fresh evidence |
+| Agent tracing | LangSmith | Tracing is implemented for the documented RCA and Supervisor workflows; see `docs/architecture/agent-interactions.md` |
+| Copilot API observability | FastAPI instrumentation, SQLite, Streamlit | Local RAG request latency, token usage, and estimated embedding/LLM costs are recorded and exposed through observability APIs and a dashboard; see `docs/operations/observability-latency-token-cost.md` |
 
 **Status interpretation:** “Implemented” means code and supporting tests or execution evidence exist. It does not mean every path has production-grade security, load, resilience, or end-to-end validation.
 
@@ -204,11 +205,35 @@ The presence of MCP tools does not mean every Copilot or agent workflow is autom
 
 ## 10. Observability
 
-LangSmith tracing is present in the RCA and Supervisor agent implementations.
+DataPilot AI has two distinct observability capabilities. They serve different execution paths and should not be described as one universally integrated tracing layer.
 
-The Copilot settings define a separate LangSmith project configuration, but tracing is disabled by default (`langsmith_tracing=False`). Do not claim active Copilot tracing without separate execution evidence.
+### 10.1 Agent workflow tracing
 
-Observability capabilities should therefore be described by component rather than as one universally integrated tracing layer.
+LangSmith tracing is implemented for the documented RCA and Supervisor agent workflows. The trace processors use allowlisted operational metadata and avoid sending full assessment content; see `docs/architecture/agent-interactions.md` for the trace boundaries.
+
+The Copilot settings define a separate LangSmith project configuration, but LangSmith tracing for Copilot is disabled by default (`langsmith_tracing=False`). Do not claim active Copilot LangSmith tracing.
+
+### 10.2 Copilot latency, token and cost observability
+
+The local Copilot API has a separate observability implementation for the instrumented RAG request path. It captures request and stage latency, LLM prompt/completion token usage, embedding token usage where available, and estimated embedding/LLM costs.
+
+The implementation consists of:
+- FastAPI request and RAG-stage instrumentation.
+- OpenAI usage metadata and configured model-pricing calculations.
+- SQLite persistence for request-level and aggregate metrics.
+- Observability API endpoints for summaries, daily trends, recent requests, and top-cost requests.
+- A Streamlit dashboard for request, latency, token, cost, and data-completeness analysis.
+
+This is local-first observability. Cost values are estimates based on configured model rates, not provider billing data. Metrics are limited to the instrumented Copilot RAG API path; Airflow and Supervisor execution metrics are not included in this V1 dashboard. AWS infrastructure costs are excluded because AWS deployment is deferred.
+
+See `docs/operations/observability-latency-token-cost.md` for the component design, endpoints, screenshots, validation evidence, execution commands, and limitations.
+
+### 10.3 Observability boundaries
+
+- LangSmith traces describe the configured RCA and Supervisor agent workflows.
+- SQLite and the Streamlit dashboard describe the instrumented Copilot RAG API path.
+- Copilot LangSmith tracing is disabled by default.
+- Do not infer end-to-end distributed tracing across Airflow, agents, MCP, and Copilot from these separate capabilities.
 
 ## 11. Repository structure
 
@@ -229,4 +254,4 @@ Major project components:
 
 The project has implemented its core data engineering pipeline, DQ framework, RCA workflow, controlled remediation path, Supervisor Agent, MCP service, and Copilot/RAG capability. The end-to-end data pipeline, end-to-end Copilot/RAG integration, Supervisor Agent, and RCA v1 hardening are completed milestones; Copilot/RAG integration has been tested end-to-end.
 
-The current portfolio closure focus is documentation accuracy, reproducible local demonstration, validation evidence, and explicit communication of security and evaluation limitations. AWS deployment is intentionally outside the current scope.
+The local Copilot latency, token, and estimated-cost observability capability is also implemented and documented. The current portfolio closure focus is documentation accuracy and consistency across the architecture, operational runbooks, and demo walkthrough. AWS deployment is intentionally outside the current scope.

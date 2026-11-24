@@ -12,6 +12,7 @@ Demonstrate how DataPilot AI connects data engineering workflows with governed A
 4. Fingerprinted remediation planning and approval boundaries.
 5. Supervisor assessment.
 6. Knowledge ingestion, retrieval, and Copilot response generation.
+7. Local Copilot latency, token-usage, and estimated-cost observability.
 
 The demo should show clear component boundaries and evidence, not imply unrestricted autonomous execution.
 
@@ -85,9 +86,19 @@ Explain the distinction between:
 - LLM response generation;
 - any additional agent/MCP orchestration, which should only be claimed if the specific path is currently verified.
 
-### Step 8 – Close with validation and limitations
+### Step 8 – Demonstrate Copilot observability
 
-Present the testing report, RAG evaluation findings, and security/governance limitations. State explicitly that AWS deployment is deferred and that the project is a locally demonstrable portfolio.
+Show the Streamlit observability dashboard and explain the local instrumentation for the RAG API request path:
+- End-to-end request and RAG-stage latency.
+- Prompt, completion, and embedding token usage where available.
+- Estimated embedding and LLM input/output costs.
+- Historical trends, recent requests, top-cost requests, and data-completeness indicators.
+
+Use the documented API commands and observed baseline in [Latency, Token Usage and Cost Observability](observability-latency-token-cost.md). Explain that costs are estimates based on configured model pricing, not provider billing. The V1 dashboard does not include Airflow or Supervisor execution metrics, and AWS infrastructure costs are outside scope.
+
+### Step 9 – Close with validation and limitations
+
+Present the testing report, RAG evaluation findings, observability evidence, and security/governance limitations. State explicitly that AWS deployment is deferred and that the project is a locally demonstrable portfolio.
 
 ## 4. Suggested 10-minute interview narrative
 
@@ -98,7 +109,8 @@ Present the testing report, RAG evaluation findings, and security/governance lim
 | 3–5 min | DQ, RCA, remediation | Evidence-based diagnosis and approval boundaries |
 | 5–6 min | Supervisor | Operational assessment across workflow evidence |
 | 6–8 min | Copilot/RAG | Knowledge ingestion, Pinecone retrieval, and LLM response |
-| 8–10 min | Engineering tradeoffs | Evaluation results, limitations, security, and local/cloud boundary |
+| 8–9 min | Observability | RAG latency, token usage, estimated cost, and dashboard limitations |
+| 9–10 min | Engineering tradeoffs | Evaluation results, limitations, security, and local/cloud boundary |
 
 The timings are presentation targets. Allow additional time when showing live API responses, logs, or detailed technical explanations.
 
@@ -113,6 +125,8 @@ Before presenting, prepare sanitized screenshots or outputs for:
 - Approval-scope/fingerprint validation evidence without executing APPLY.
 - Supervisor assessment.
 - Copilot answer with retrieved source references.
+- Observability dashboard overview, latency, token-usage, and cost screenshots.
+- Sanitized observability API summary/trend output, if used.
 - Test summary and RAG benchmark summary.
 
 ## 6. Demo completion criteria

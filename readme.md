@@ -141,7 +141,21 @@ The diagrams below use the project's existing visual assets so readers can under
 
 ![Gold processing overview](images/gold-processing-overview.png)
 
+### Copilot Observability Dashboard
 
+![DataPilot AI Observability Dashboard](images/observation-dashboard.png)
+
+**Performance and latency analytics**
+
+![Observability Performance](images/observation-dashboard-performance.png)
+
+**Token usage analytics**
+
+![Observability Token Usage](images/observation-dashboard-token_usage.png)
+
+**Cost analytics**
+
+![Observability Cost Analytics](images/observation-dashboard-cost.png)
 
 ### Main technology areas
 
@@ -217,7 +231,15 @@ The diagrams below use the project's existing visual assets so readers can under
 
 - Retrieval evaluation to compare retrieval strategies and understand quality trade-offs.
 
+### Observability and Cost Analytics
 
+- End-to-end Copilot API request latency measurement.
+- RAG stage-level latency tracking, including embedding, Pinecone query, retrieval, and LLM generation.
+- Prompt, completion, and total token usage tracking.
+- Estimated OpenAI embedding and LLM request costs.
+- SQLite-based persistence of request-level observability metrics.
+- Streamlit dashboard for latency, token usage, request statistics, and cost analysis.
+- Request-level exploration and identification of high-cost and slow requests.
 
 ## Key Engineering Decisions
 
@@ -357,10 +379,14 @@ Production readiness is a separate assessment from functional completion. Authen
 
 - [Security and governance](docs/architecture/security-and-governance.md)
 
+- [Latency, Token Usage and Cost Observability](docs/operations/observability-latency-token-cost.md)
+
 
 
 ## 11. What this project demonstrates
 
+The project includes local Copilot observability for request latency, RAG stage timings, token usage, and estimated LLM and embedding costs. Metrics are persisted in SQLite and presented through a Streamlit dashboard.
 
+LangSmith tracing and local Copilot observability serve separate purposes and are documented independently.
 
-DataPilot AI demonstrates an architecture-led approach to combining data engineering, DataOps automation, agentic workflows, retrieval-augmented generation, and governance. Its central idea is to make operational data workflows more explainable and controlled: detect a data-quality issue, investigate it, prepare a governed response, assess the outcome, and make engineering knowledge accessible through a Copilot.
+The implementation is finalized as a local-first portfolio project. 

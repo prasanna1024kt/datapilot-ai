@@ -77,7 +77,20 @@ The current evidence does not establish all of the following:
 - Generated-answer quality across the complete retrieval benchmark.
 - Production load, resilience, security penetration testing, or disaster-recovery objectives.
 
-## 7. Recommended evidence capture for portfolio review
+## 7. Copilot observability validation
+
+The local Copilot observability implementation has a dedicated validation record in `docs/operations/observability-latency-token-cost.md`. The documented checks cover request/stage latency instrumentation, token usage extraction, configured-rate cost calculation, SQLite persistence, observability API responses, and the Streamlit dashboard.
+
+The initial observed baseline in that run recorded 20 requests, with 20 successful and zero failed requests. Average request latency was 1,407.85 ms. The run recorded 3,346 LLM tokens and an estimated total cost of USD 0.00652424 for the single fully priced request.
+
+Interpretation boundaries:
+- Only one of the 20 initial records had complete usage and cost data; the cost total therefore represents priced requests, not all requests.
+- Estimated costs use configured model rates and are not provider billing totals.
+- The dashboard covers the instrumented Copilot RAG API path; Airflow and Supervisor execution metrics are excluded from this V1 scope.
+- AWS infrastructure costs are not measured because AWS deployment is deferred.
+- This observability baseline does not replace retrieval-strategy evaluation or generated-answer quality evaluation.
+
+## 8. Recommended evidence capture for portfolio review
 
 For a reproducible review, capture:
 
@@ -91,9 +104,10 @@ For a reproducible review, capture:
 8. A DRY_RUN remediation plan and approval-scope evidence; do not execute APPLY.
 9. Supervisor assessment output.
 10. A Copilot query with retrieved source references and the corresponding API response.
+11. Observability dashboard screenshots and sanitized API summary/trend outputs.
 
 Store sanitized output and screenshots under a dedicated evidence directory only after reviewing them for secrets, personal data, and environment-specific values.
 
-## 8. Conclusion
+## 9. Conclusion
 
 The shared audit demonstrates a strong automated-test and local-configuration baseline. It does not establish production readiness or complete end-to-end integration across every service. The most valuable next validation is a reproducible local demonstration and Python 3.11 compatibility run, with no AWS deployment or production writes required.
