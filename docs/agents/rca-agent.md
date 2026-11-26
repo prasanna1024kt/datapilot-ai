@@ -327,52 +327,9 @@ The code shown writes the RCA result file using a normal file write; it does not
 
 ## 13. End-to-End Execution Flow
 
-```text
-CLI Arguments
-     |
-     v
-Start LangSmith Trace Context
-     |
-     v
-MCP: get_dq_result
-     |
-     v
-Validate DQ Response
-     |
-     v
-Derive Investigation Scope
-     |
-     +-----------------------------+
-     |             |               |
-     v             v               v
-inspect_bronze  inspect_silver  get_invalid_records
-     |             |               |
-     +-------------+---------------+
-                   |
-                   v
-        get_remediation_audit
-                   |
-                   v
-        Validate All MCP Evidence
-                   |
-                   v
-         Build Evidence Bundle
-                   |
-                   v
-         OpenAI Responses API
-                   |
-                   v
-          Parse JSON Response
-                   |
-                   v
-       Validate Schema and Guardrails
-                   |
-                   v
-          Save RCA JSON Result
-                   |
-                   v
-          Print RCA Result
-```
+
+![DataPilot AI Agent Interactions](../../images/rca_execution_flow.png)
+
 
 ## 14. Safety Boundaries
 

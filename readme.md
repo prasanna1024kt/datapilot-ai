@@ -106,20 +106,16 @@ The diagrams below use the project's existing visual assets so readers can under
 **Architecture:** See [DataPilot AI Architecture](docs/architecture/architecture.md) for the detailed component design, data flows, agent responsibilities, MCP integration, and observability boundaries.
 
 
+### Architecture
 
-### Data platform and orchestration
-
-
-
-![DataPilot AI pipeline orchestration](images/pipeline-orchestration.png)
-
+![DataPilot AI Architecture](images/HLD_v1.gif)
 
 
 ### Olist pipeline execution
 
 
 
-![Olist Airflow pipeline](images/airflow_olist.png)
+![Olist Airflow pipeline](images/datapilot_olist_order_pipeline_latest.png)
 
 
 
@@ -127,7 +123,7 @@ The diagrams below use the project's existing visual assets so readers can under
 
 
 
-![DataPilot AI agent interactions](images/agent-interactions.png)
+![DataPilot AI agent interactions](images/agent_interaction.gif)
 
 
 
@@ -135,7 +131,7 @@ The diagrams below use the project's existing visual assets so readers can under
 
 
 
-![Gold incremental Iceberg flow](images/gold-incremental-iceberg-flow.png)
+![Gold incremental Iceberg flow](images/incremental_gold_processing.gif)
 
 
 

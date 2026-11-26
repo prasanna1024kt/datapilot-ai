@@ -20,29 +20,8 @@ These are coordinated workflows, not one unrestricted autonomous agent chain.
 
 ## 2. High-level architecture
 
+![DataPilot AI Agent Interactions](../../images/agent_interaction.gif)
 
-```mermaid
-flowchart TD
-    A[Airflow pipeline DAG] --> B[Silver and DQ tasks]
-    B --> C{DQ result}
-    C -->|Failure| D[RCA Agent]
-    C -->|Pass| G[Gold processing]
-    D --> E[RCA JSON result]
-    E --> F[Remediation Agent]
-    F --> H[Validate RCA and build plan]
-    H --> I[Fingerprint and save plan]
-    I --> J[Human approval workflow]
-    J -->|Approved| K[MCP remediation tools]
-    J -->|Rejected| L[Rejected approval record]
-    K --> M[Remediation executor]
-    M --> N[Quarantine / remediation result]
-    N --> O[Gold refresh workflow]
-    G --> P[Supervisor Agent]
-    E --> P
-    O --> Q[Supervisor Agent]
-    P --> R[Assessment JSON]
-    Q --> S[Remediation assessment JSON]
-```
 
 **Important interpretation:** The diagram shows the logical responsibilities and workflow relationship. It does not mean the Supervisor calls the Remediation Agent, or that the Remediation Agent directly calls MCP. The supplied Remediation Agent code only reads an RCA JSON file, validates it, creates a plan, fingerprints it, and writes the plan file.
 
