@@ -455,3 +455,64 @@ The DataPilot AI MCP Server exposes controlled tools for operational evidence ga
 The tool set has distinct side-effect boundaries. Evidence retrieval and audit lookup are read-only with respect to source data; inspection jobs create result artifacts; approval and rejection write workflow records; and the remediation execution tool is constrained to a validated dry-run result. The approval tool records only a `DRY_RUN_ONLY` approval, not permission to apply source-data changes.
 
 This separation allows agents and MCP clients to use operational capabilities while keeping the underlying data-processing, reasoning, approval, and execution responsibilities in their respective components.
+
+## 19. Detailed Tool Invocation Architecture
+
+### 19.1 Request-to-tool interaction
+
+![DataPilot AI MCP TOOl](../../images/mcp_tool_interaction.gif)
+
+
+### 19.2 Tool contract matrix
+
+| Tool | Inputs | Result / side effect |
+|---|---|---|
+| `get_dq_result` | `dataset` | Reads existing DQ JSON |
+| `inspect_bronze` | dataset, column, minimum, maximum | Spark inspection JSON |
+| `inspect_silver` | dataset, column, minimum, maximum | Spark inspection JSON |
+| `get_invalid_records` | dataset, column, minimum, maximum | Spark invalid-record JSON |
+| `get_remediation_audit` | optional dataset/execution_id, limit 1–20; at least one filter | Read-only audit records |
+| `approve_remediation` | dataset, action, approved_by, plan_fingerprint | Writes approval restricted to `DRY_RUN_ONLY` |
+| `reject_remediation` | dataset, action, rejected_by, reason | Writes rejection record |
+| `execute_remediation` | dataset, action | Invokes executor and validates DRY_RUN result |
+
+### 19.3 Inspection execution
+
+![DataPilot AI MCP TOOl](../../images/mcp_tools_inspeaction_execution.gif)
+
+
+The MCP wrapper validates inputs, launches the Spark job, checks the return code and output file, and returns the result. The Spark job owns the actual inspection logic. Inspection subprocesses do not have an explicit timeout in the supplied wrapper.
+
+### 19.4 Approval validation sequence
+
+![DataPilot AI MCP TOOl](../../images/mcp_tool_approval_execution.gif)
+
+
+The approval record's `execution_authorized: true` is limited to `DRY_RUN_ONLY`; it is not APPLY authorization.
+
+### 19.5 Audit query behavior
+
+`get_remediation_audit` reads `datapilot_audit.remediation_execution_summary`, uses parameterized filters, orders by `updated_at` descending and applies a limit. The connection sets `default_transaction_read_only=on`. Date/time values are converted to ISO strings and `Decimal` values to floats for JSON-safe output.
+
+### 19.6 Side-effect classification
+
+| Tool class | Tools | Side effect |
+|---|---|---|
+| Read artifact | `get_dq_result` | Reads JSON |
+| Inspect data | `inspect_bronze`, `inspect_silver`, `get_invalid_records` | Runs Spark and writes inspection output |
+| Read audit | `get_remediation_audit` | Read-only PostgreSQL query |
+| Record decision | `approve_remediation`, `reject_remediation` | Writes workflow JSON |
+| Constrained execution | `execute_remediation` | Runs executor and validates DRY_RUN result |
+
+### 19.7 Operational and security observations
+
+- Dataset/column checks reject empty values and basic path traversal patterns, but are not full allowlists.
+- Inspection subprocesses have no explicit timeout; remediation executor invocation has a 60-second timeout.
+- Inspection errors can include captured stdout/stderr; remediation errors avoid returning arbitrary process output to the client.
+- Inspection output filenames are dataset-based and may contend during concurrent same-dataset calls.
+- Approval/rejection files are dataset-scoped and the supplied implementation does not provide atomic publication or concurrency control for them.
+- DNS rebinding protection and allowed-host settings do not alone establish the complete deployed authentication/authorization posture.
+
+### 19.8 Integration responsibilities
+
+MCP exposes operational capabilities. RCA uses evidence-gathering tools; remediation workflows use approval/execution tools within their supported scope; Supervisor decision logic remains in its own module; Spark jobs own data inspection; PostgreSQL stores queried audit records. MCP is not itself an agent, orchestration engine, DQ engine or remediation reasoning engine.

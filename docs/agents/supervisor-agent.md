@@ -547,3 +547,65 @@ These notes describe this file only. They should not be interpreted as claims ab
 The DataPilot AI Supervisor Agent provides operational oversight across the main data pipeline and remediation workflows. It combines Airflow task state, DQ results, RCA evidence, Gold completion status, and remediation execution outcomes into structured decisions and JSON assessment reports.
 
 Its three entry points serve different purposes: current pipeline-run assessment, remediation-run assessment, and standalone read-only assessment. The in-DAG paths observe existing run evidence without invoking RCA or executing remediation. The standalone path can invoke the existing RCA agent when DQ evidence indicates that investigation is needed, while still keeping remediation execution and DAG triggering outside the Supervisor's responsibility.
+
+## 18. Architecture and Interaction Diagrams
+
+### 18.1 Three assessment entry points
+
+![DataPilot AI SA](../../images/supervisor_agent_architecture.gif)
+
+
+
+Only the standalone path can invoke the RCA subprocess. The two DAG-run paths consume current-run task/evidence state. None of these paths triggers Airflow or executes remediation.
+
+### 18.2 Main DAG-run decision priority
+
+![DataPilot AI SA](../../images/sa_dag_priority.gif)
+
+
+This reflects the documented priority: invalid DQ evidence, DQ failure, task failure, Gold summary completion, then healthy.
+
+### 18.3 Standalone RCA invocation
+
+![DataPilot AI SA](../../images/sa_rca_invoke.gif)
+
+
+The standalone helper supports a failed check named `range_check:<column>` with numeric expression `minimum <= value <= maximum`. If no supported check exists, RCA is skipped. The subprocess timeout is 900 seconds.
+
+## 19. Assessment Output Interpretation
+
+The Supervisor output is an operational assessment, not a command request:
+- `decision` is deterministic Python decision logic.
+- `recommended_next_actions` contains suggested follow-up.
+- Task-state counts summarize the current Airflow run.
+- DQ evidence status records whether the report was considered current and usable.
+- RCA evidence status records task/report availability.
+- Gold task status records dataset and business-summary completion.
+- Safety flags identify actions the Supervisor did not perform.
+
+For remediation assessments, requested mode and execution-ID status are observational. A requested APPLY mode alone is not proof of a committed APPLY.
+
+## 20. Evidence Freshness and Timestamp Semantics
+
+For DQ, the report modification time is compared with the `dq_<dataset>` task start. A report more than one second older than task start is stale. Missing task instances, unknown task start times and unreadable reports receive explicit evidence statuses.
+
+RCA evidence is accepted only when `rca_<dataset>` is successful and the run-scoped report exists and can be read. The implementation does not apply the same modification-time freshness comparison to RCA reports.
+
+## 21. LangSmith Tracing and Data Minimization
+
+Trace helpers allowlist selected operational input/output fields rather than forwarding the full DAG-run object or assessment object. This reduces trace payload but is not, by itself, a complete secrets-redaction or data-loss-prevention system. Local failed-task diagnostics can contain full log content; local assessment files and task logs therefore remain operational artifacts that need appropriate handling.
+
+## 22. Decision Engine Design
+
+The final assessment is deterministic Python logic based on Airflow states, DQ outcomes, evidence availability/freshness, Gold completion and remediation task outcomes. The supplied Supervisor module does not use an LLM to make its final decision.
+
+## 23. Operational Capability Boundaries
+
+| Question | Capability | Boundary |
+|---|---|---|
+| Is current pipeline healthy? | `run_dag_assessment()` | Reads current run/evidence |
+| Why did standalone DQ assessment flag? | `run_assessment()` | May invoke supported RCA subprocess |
+| Did remediation workflow complete? | `run_remediation_dag_assessment()` | Observes task outcomes and metadata |
+| Can Supervisor approve? | No | Approval workflow owns approval |
+| Can Supervisor trigger DAG? | No | It does not trigger Airflow |
+| Can Supervisor execute remediation? | No | It does not modify data |

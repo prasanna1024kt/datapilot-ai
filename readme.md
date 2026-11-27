@@ -46,29 +46,18 @@ DataPilot AI is a technical portfolio implementation of that approach. It does n
 
 ## 2. How DataPilot AI addresses the problem
 
-
-
-DataPilot AI combines a reusable data pipeline with specialized agents and a RAG-powered Copilot. Each component has a defined responsibility rather than allowing one autonomous agent to make unrestricted changes.
-
-
+DataPilot AI combines a reusable data pipeline, specialized AI agents, and a RAG-powered Copilot. Each component has a defined responsibility, with controlled interactions and human approval for remediation.
 
 | Operational challenge | DataPilot AI capability | How it helps |
-
-| Repeated pipeline implementation | Configuration-driven PySpark framework | Reuses common readers, transformations, path construction, writers, and DQ execution across datasets. |
-
-| Pipeline coordination | Apache Airflow | Orchestrates Bronze, Silver, DQ, RCA, Gold, and Supervisor workflow stages. |
-
-| Data-quality failures | Configurable data-quality framework | Applies dataset rules and produces evidence that can drive investigation. |
-
-| Time-consuming investigation | RCA Agent | Analyzes failure evidence and produces a structured root-cause result with recommendations. |
-
-| Unsafe or ambiguous data fixes | Remediation Agent and approval workflow | Creates a fingerprinted remediation plan and keeps human approval separate from execution. |
-
-| Operational status without explanation | Supervisor Agent | Assesses pipeline and remediation outcomes and produces a structured operational assessment. |
-
-| Searching technical documentation manually | RAG-powered Data Engineering Copilot | Retrieves relevant engineering knowledge from the indexed documentation and uses an LLM to formulate a response through an API. |
-
-| Tool access across workflows | MCP server | Exposes defined inspection, approval, audit, and remediation operations to supported clients and agents. |
+|---|---|---|
+| Repeated pipeline implementation | **Configuration-driven PySpark framework** | Reuses common readers, transformations, path construction, writers, and DQ execution across datasets. |
+| Pipeline coordination | **Apache Airflow** | Orchestrates Bronze, Silver, DQ, RCA, Gold, and Supervisor workflow stages. |
+| Data-quality failures | **Data Quality framework** | Applies configurable dataset rules and generates structured quality evidence. |
+| Time-consuming investigation | **RCA Agent** | Analyzes failure evidence and produces root-cause findings with recommendations. |
+| Unsafe or ambiguous data fixes | **Remediation Agent and approval workflow** | Generates fingerprinted remediation plans and separates human approval from execution. |
+| Limited operational visibility | **Supervisor Agent** | Assesses pipeline and remediation outcomes and recommends next actions. |
+| Manual technical documentation search | **RAG-powered Data Engineering Copilot** | Retrieves relevant engineering knowledge and generates contextual LLM responses through an API. |
+| Fragmented tool access | **MCP server** | Exposes controlled inspection, approval, audit, and remediation operations to supported clients and agents. |
 
 
 ## 3. End-to-end solution flow

@@ -76,3 +76,75 @@ For the next evaluation cycle:
 ## 8. Conclusion
 
 The available experiment provides useful comparative evidence: Multi-Query favored recall, while MMR produced the best reported ranking metric. The experiment is not sufficient on its own to select a production strategy because cost, latency, generated-answer quality, and regression behavior were not fully measured. Keep the current strategy choice explicit and evidence-driven rather than presenting the benchmark as a completed production optimization.
+
+## 9. RAG Evaluation Architecture
+
+![DataPilot AI RAG evaluation](../../images/rag_evaluation_architecture.gif)
+
+This separates retrieval evaluation from answer evaluation. The reported Multi-Query experiment evaluated retrieval, not generated-answer quality.
+
+## 10. Retrieval Metric Definitions
+
+| Metric | Meaning |
+|---|---|
+| Hit@5 | Whether at least one relevant item appears in top five |
+| Recall@5 | Fraction of expected relevant items retrieved in top five |
+| Precision@5 | Fraction of top-five results that are relevant |
+| MRR | Average reciprocal rank of the first relevant result |
+
+The benchmark notes refer to recall/Hit@5. Record the exact metric implementation and aggregation method; Hit@5 and Recall@5 need not be interchangeable when a question has multiple expected sources.
+
+## 11. Historical Experiment Findings
+
+The 16-question benchmark reported:
+- Multi-Query recall: 100%.
+- Multi-Query precision@5: 25%.
+- MMR highest reported MRR: 0.825.
+- Threshold 0.70 returned no result for 14 questions; threshold 0.40 retained full Hit@5.
+
+This suggests a coverage/precision tradeoff in that small benchmark. It is an engineering comparison, not statistically conclusive evidence or a universal strategy ranking.
+
+## 12. Retrieval versus Answer Evaluation
+
+### Retrieval evaluation
+
+Requires a fixed question set, expected relevant-source labels, retrieval strategy, top-k, threshold and consistent metric implementation. It answers whether the expected evidence was retrieved and how highly it ranked.
+
+### Generated-answer evaluation
+
+Must be a separate, controlled run with fixed prompt/model/retriever configuration. The available notes identify RAGAS measures: faithfulness, answer relevancy, context precision and context recall. Earlier RAGAS results came from a separate evaluation and must not be attributed to the Multi-Query benchmark.
+
+## 13. Reproducibility Record
+
+| Dimension | Record |
+|---|---|
+| Dataset | Evaluation question-set version |
+| Ground truth | Expected-source labels/version |
+| Corpus | Document snapshot/revision |
+| Chunking | Chunker version and parameters |
+| Embeddings | Model and dimensions |
+| Vector store | Pinecone index and namespace |
+| Retrieval | Strategy, top-k, threshold, MMR parameters |
+| Generation | Model and prompt version for answer evaluation |
+| Metrics | Definitions and aggregation |
+| Runtime | Latency and token/API cost |
+| Results | Per-question evidence and aggregate scores |
+
+A previously reported ingestion run loaded 14 documents, created 316 chunks, generated 316 embeddings and upserted 316 vectors to the 1536-dimensional `datapilot-ai-knowledge` index in namespace `datapilot-ai`. These are historical run values; verify current Pinecone statistics before treating them as live state.
+
+## 14. Evaluation Decision Framework
+
+Do not choose a retriever using one aggregate metric. Recall matters when missing evidence is costly; precision matters when context budget and irrelevant chunks are constraints; MRR matters when the first relevant result's rank is important. Evaluate thresholding together with abstention rate and coverage. Measure latency and API/token cost before selecting a default.
+
+## 15. Regression and Change Management
+
+Before changing retrieval strategy, threshold, chunking or embedding model:
+1. Run the versioned retrieval benchmark.
+2. Compare per-question results as well as aggregate scores.
+3. Review regressions on previously answered questions.
+4. Run separate generated-answer evaluation.
+5. Measure latency and cost.
+6. Record configuration and evidence.
+7. Define regression acceptance thresholds before promotion.
+
+The supplied notes do not specify numeric acceptance thresholds; they must be set by the project owner rather than invented.

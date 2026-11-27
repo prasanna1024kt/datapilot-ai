@@ -272,3 +272,70 @@ It supports:
 - Glue Catalog and Iceberg as the quarantine target
 
 Extending this framework to additional datasets or remediation actions requires corresponding configuration, validation, Spark implementation and approval-scope changes.
+
+## 15. End-to-End Workflow Diagrams
+
+### 15.1 Plan, review and DRY_RUN lifecycle
+
+![DataPilot AI remediation-wf](../../images/remediation_wf.gif)
+
+
+The approval request's `PENDING_REVIEW` status and candidate plan's `PENDING_APPROVAL` status are separate workflow states.
+
+### 15.2 DRY_RUN versus APPLY
+
+![DataPilot AI remediation-wf](../../images/remediation_wf_dry_run_vs_apply.gif)
+
+
+An MCP approval limited to `DRY_RUN_ONLY` cannot satisfy APPLY authorization. The exact ordering of executor and Spark validations remains defined by their implementations.
+
+## 16. Plan Fingerprint and Approval Integrity
+
+The executor validates dataset, action, approval requirement, plan status `PENDING_APPROVAL`, plan mode `DRY_RUN`, approval status `APPROVED`, `execution_authorized`, fingerprint equality and execution-scope equality. The MCP approval tool independently calls `validate_plan_fingerprint(plan)` and compares the result with the supplied fingerprint.
+
+The supplied document identifies the validation function but does not specify the exact canonicalization/hash payload. Do not assert a particular algorithm or included JSON fields without reviewing `agents/remediation/plan_fingerprint.py`.
+
+## 17. Quarantine Data Contract
+
+| Attribute | Current implementation |
+|---|---|
+| Dataset/action | `olist_order_payments` / `QUARANTINE_RECORDS` |
+| Source | Silver Parquet |
+| Target | Apache Iceberg |
+| Catalog/database/table | `glue_catalog.datapilot.olist_order_payments_quarantine` |
+| Business key | `order_id`, `payment_sequential` |
+| Location | `processed/quarantine/olist_order_payments` |
+
+Invalid installment records have `payment_installments` NULL, below 1 or above 100. The current approved execution expects two invalid records. The writer also refuses installment-only quarantine if `payment_type` or `payment_value` null checks fail, or if `payment_value` violates its configured range.
+
+Quarantine metadata includes `execution_id`, `quarantine_reason`, `rule_name`, `source_layer` and `quarantined_at`. The MERGE inserts missing business keys and does not update/delete existing quarantine records.
+
+## 18. Commit Verification and Failure Semantics
+
+After MERGE, the writer verifies that all expected invalid business keys exist, original source-column values match Silver using null-safe equality, and expected keys are unique. Only then is a successful APPLY audit generated.
+
+| Status | Meaning |
+|---|---|
+| `FAILED_BEFORE_WRITE` | Failure before persistent changes began |
+| `WRITE_OUTCOME_UNKNOWN` | A write may have started; commit outcome uncertain |
+| `COMMIT_SUCCEEDED_VERIFICATION_FAILED` | MERGE completed but verification failed |
+| `COMMITTED_VERIFIED_AUDIT_FAILED` | Commit/verification succeeded but success audit publication failed |
+| `APPLY_OUTCOME_UNKNOWN` | Executor did not receive verified APPLY success |
+
+Do not automatically retry an unknown outcome. Inspect the Iceberg target and Spark logs, reconcile business keys, review execution-specific audit/history, and only then decide whether a new execution ID and controlled retry are appropriate. The local file lock is not a distributed lock across hosts.
+
+## 19. Audit Artifacts
+
+| Artifact | Purpose |
+|---|---|
+| `{dataset}_{execution_id}_dry_run.json` | DRY_RUN result |
+| `{dataset}_{execution_id}_apply.json` | APPLY result |
+| `results/remediation/history/` | Execution history |
+| `results/remediation/` | Dataset-level execution result |
+| `results/approvals/` | Approval/rejection records |
+
+The Spark job uses temporary files and atomic publication for audit artifacts. Do not assume the MCP approval/rejection JSON writes have the same atomicity guarantee.
+
+## 20. Quarantine versus Source Correction
+
+`SOURCE_CORRECTION` in `spark/jobs/remediate_data.py` is separate: it applies explicitly approved corrections to Bronze and overwrites the Bronze Parquet dataset after validation. `QUARANTINE_RECORDS` reads Silver and writes invalid records to a separate Iceberg quarantine target without modifying Silver. These mechanisms have different source/target behavior and must not be presented as interchangeable modes.

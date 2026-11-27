@@ -212,3 +212,67 @@ The DataPilot AI DQ framework provides configurable PySpark checks for row count
 The framework is integrated into the Airflow pipeline through a dataset-level execution job that writes structured JSON evidence and fails the task when configured checks fail.
 
 Its current design provides a reusable foundation for data quality validation. Schema validation, richer rule semantics, run-specific reporting, and performance optimization remain potential areas for future enhancement.
+
+## 13. Detailed Architecture and Execution Design
+
+![DataPilot AI Data Quality](../../images/data_quality.gif)
+
+### 13.1 Component responsibilities
+
+| Component | Responsibility | Boundary |
+|---|---|---|
+| Airflow DQ task | Schedules job and records outcome | Does not implement checks |
+| `run_dq.py` | Loads shared/dataset config, reads Silver Parquet, invokes engine and writes report | Not the reusable check library |
+| `DQEngine` | Orchestrates enabled configured checks | Does not infer business rules |
+| `checks.py` | Implements individual check algorithms | Does not select business keys or thresholds |
+| Supervisor | Reads DQ report and task evidence | Does not run DQ or change data |
+
+### 13.2 Check semantics
+
+| Check | Evaluation | Important detail |
+|---|---|---|
+| Row count | Actual count >= configured minimum | Spark `count()` action |
+| Required columns | Names exist in DataFrame schema | Does not validate semantic correctness |
+| Null checks | Counts Spark nulls | Empty/whitespace strings are not automatically null |
+| Duplicate check | Groups configured keys and counts groups > 1 | Key suitability is a data-model decision |
+| Range checks | Numeric values within configured bounds | Nulls are not explicitly range violations |
+
+### 13.3 Execution sequence
+
+![DataPilot AI Data Quality](../../images/dq_sequence_flow.gif)
+
+
+### 13.4 Report lifecycle and downstream use
+
+The report is written before a failed result raises an error. Therefore, Airflow can record a failed DQ task while retaining JSON evidence for investigation. Reports are dataset-scoped, not run-scoped. The Supervisor compares the report modification time with the corresponding DQ task start time and rejects a report more than one second older than that start time as stale.
+
+### 13.5 Spark execution considerations
+
+Checks can invoke Spark actions such as `count()`, `groupBy()` and `collect()`. These actions can trigger Spark jobs and scans. Duplicate detection can require a shuffle. The range check collects at most ten sample invalid values, but still evaluates the underlying invalid-row condition. The supplied implementation does not establish caching or a consolidated single-pass validation plan.
+
+### 13.6 Failure semantics
+
+| Condition | Behavior |
+|---|---|
+| Required check column missing | Relevant check reports failure |
+| DQ report status FAIL | Report is written, then job raises runtime error |
+| No checks enabled | Current `has_failures()` can result in PASS |
+| Invalid/unavailable input or configuration | Job fails through underlying loader/Spark behavior |
+
+### 13.7 Conceptual report shape
+
+```json
+{
+  "dataset": "<dataset>",
+  "status": "PASS",
+  "checks": [
+    {"name": "<configured-check-name>", "status": "PASS"}
+  ]
+}
+```
+
+This is illustrative only; use the emitted report for the complete check-specific schema.
+
+### 13.8 Design constraints and future evolution
+
+Potential enhancements—not current capabilities—include formal YAML schema validation/versioning, run-specific report paths, empty-string semantics, explicit range-check null handling, schema/type checks, severity levels and reducing repeated Spark scans.
