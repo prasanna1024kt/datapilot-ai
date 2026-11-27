@@ -228,31 +228,17 @@ The diagrams below use the project's existing visual assets so readers can under
 
 ## Key Engineering Decisions
 
-
-
 | Area | Decision | Rationale |
-
 |---|---|---|
-
-| Data processing | Configuration-driven Spark framework | Reusable processing across datasets without duplicating pipeline logic |
-
-| Data architecture | Bronze, Silver, and Gold layers | Separate ingestion, refinement, and analytical workloads |
-
-| Gold storage | Apache Iceberg | Support table-level operations and incremental MERGE workflows |
-
-| Vector database | Pinecone | Managed vector storage for knowledge retrieval |
-
-| RAG evaluation | Similarity, MMR, and Multi-Query benchmarking | Evaluate retrieval quality rather than assuming one strategy is best |
-
-| Agent architecture | Separate RCA, Remediation, and Supervisor responsibilities | Maintain clear boundaries between diagnosis, execution, and assessment |
-
-| Remediation governance | Fingerprinted plans and human approval | Enforce explicit approval, fingerprint, and execution-scope checks, with documented security limitations. |
-
-| Tool integration | MCP server | Expose selected platform capabilities through a standard tool interface |
-
-| Deployment approach | Local-first portfolio implementation | Demonstrate workflows locally while keeping AWS deployment as a future scope |
-
-
+| Data processing | Configuration-driven Spark framework | Reusable processing across datasets without duplicating pipeline logic. |
+| Data architecture | Bronze, Silver, and Gold layers | Separates ingestion, refinement, and analytical workloads. |
+| Gold storage | Apache Iceberg | Supports table-level operations and incremental MERGE workflows. |
+| Vector database | Pinecone | Provides managed vector storage for knowledge retrieval. |
+| RAG evaluation | Similarity, MMR, and Multi-Query benchmarking | Evaluates retrieval quality rather than assuming one strategy is best. |
+| Agent architecture | Separate RCA, Remediation, and Supervisor responsibilities | Maintains clear boundaries between diagnosis, execution, and assessment. |
+| Remediation governance | Fingerprinted plans and human approval | Enforces explicit approval, fingerprint, and execution-scope checks, with documented security limitations. |
+| Tool integration | MCP server | Exposes selected platform capabilities through a standard tool interface. |
+| Deployment approach | Local-first portfolio implementation | Demonstrates workflows locally while keeping AWS deployment outside the current scope. |
 
 DataPilot AI is currently demonstrated locally. AWS S3 and Glue are part of the target architecture.
 
@@ -694,12 +680,14 @@ The project is presented as a **local portfolio implementation**. AWS deployment
 Production readiness is a separate assessment from functional completion. Authentication and authorization, deployment hardening, broader failure-mode testing, operational latency/cost measurement, and ongoing RAG quality regression controls should be evaluated against the intended production environment before making production-readiness claims.
 
 
-
 ## 10. Documentation
 
 
-
 - [Architecture](docs/architecture/architecture.md)
+
+- [HLD](docs/architecture/hld.md)
+
+- [LLD](docs/architecture/lld.md)
 
 - [Agent interactions](docs/architecture/agent-interactions.md)
 
